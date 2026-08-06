@@ -1,0 +1,5 @@
+# One stock per line. SH/SZ suffix is optional.
+# Examples:
+# 600519.SH
+# 000001.SZ
+# 300750.SZ

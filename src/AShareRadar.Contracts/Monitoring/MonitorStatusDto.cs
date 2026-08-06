@@ -1,0 +1,16 @@
+namespace AShareRadar.Contracts.Monitoring;
+
+public sealed record MonitorStatusDto(
+    string MarketStatus,
+    string MonitorStatus,
+    DateTimeOffset? LastScanTime,
+    DateTimeOffset? NextScanTime,
+    int ActiveOpportunityCount,
+    int TodayNewCount,
+    int DisappearedCount,
+    int FocusedCount,
+    string HistoricalStrategyScanStatus = "NotStarted",
+    DateTimeOffset? LastHistoricalStrategyScanTime = null,
+    DateTimeOffset? NextHistoricalStrategyScanTime = null,
+    int HistoricalStrategyScanSymbolCount = 0,
+    int HistoricalStrategyScanSignalCount = 0);

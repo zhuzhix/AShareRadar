@@ -1,0 +1,66 @@
+# Build outputs
+**/bin/
+**/obj/
+**/.build/
+artifacts/
+.run/
+.vs/
+
+# Logs and smoke-test output
+*.log
+*.out.log
+*.err.log
+Logs/
+
+# Runtime data and large market databases
+data/
+**/data/runtime/
+**/*.duckdb
+**/*.duckdb.wal
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+**/download_progress.csv
+**/live_signals/
+**/live_signal_runs/
+**/model_outputs/
+**/parquet/
+**/backup/
+
+# Python caches and vendored packages
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+tools/history_update/.python_packages/
+tools/**/.python_packages/
+
+# Local IDE and user settings
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Generated verification artifacts
+docs/*handoff*.md
+tools/eastmoney_quant/verify_*_result.json
+tools/eastmoney_quant/verify_gm_api_introspection.json
+tools/eastmoney_quant/verify_bulk_quotes_result.json
+tools/eastmoney_quant/verify_sentiment_data_result.json
+tools/eastmoney_quant/verify_realtime_quote_result.json
+
+# Root-level copied native DLLs and temporary native drops
+/gmsdk.dll
+/thostmduserapi_se.dll
+/thostmd_wrap.dll
+
+# Keep source-controlled seed/config data under ServiceHost
+!src/AShareRadar.ServiceHost/data/
+!src/AShareRadar.ServiceHost/data/*.csv
+!src/AShareRadar.ServiceHost/data/*.json
+
+# Keep required EastMoney .NET SDK reference
+!lib/
+!lib/eastmoney/
+!lib/eastmoney/gmsdk-net-x64.dll

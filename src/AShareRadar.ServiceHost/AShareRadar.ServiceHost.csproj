@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\AShareRadar.Contracts\AShareRadar.Contracts.csproj" />
+    <ProjectReference Include="..\AShareRadar.Application\AShareRadar.Application.csproj" />
+    <ProjectReference Include="..\AShareRadar.Infrastructure\AShareRadar.Infrastructure.csproj" />
+    <ProjectReference Include="..\AShareRadar.Persistence\AShareRadar.Persistence.csproj" />
+    <ProjectReference Include="..\AShareRadar.Strategies\AShareRadar.Strategies.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="data\sector-mapping.csv" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="data\concept-mapping.csv" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="data\trading-calendar-cn.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="data\market-sentiment-external.csv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

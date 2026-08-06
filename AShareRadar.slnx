@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AShareRadar.Application/AShareRadar.Application.csproj" />
+    <Project Path="src/AShareRadar.Contracts/AShareRadar.Contracts.csproj" />
+    <Project Path="src/AShareRadar.Desktop/AShareRadar.Desktop.csproj" />
+    <Project Path="src/AShareRadar.Domain/AShareRadar.Domain.csproj" />
+    <Project Path="src/AShareRadar.Infrastructure/AShareRadar.Infrastructure.csproj" />
+    <Project Path="src/AShareRadar.Persistence/AShareRadar.Persistence.csproj" />
+    <Project Path="src/AShareRadar.ServiceHost/AShareRadar.ServiceHost.csproj" />
+    <Project Path="src/AShareRadar.Strategies/AShareRadar.Strategies.csproj" />
+  </Folder>
+</Solution>
