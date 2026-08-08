@@ -42,9 +42,7 @@ public sealed class EastMoneyQuantDotNetKLineDataProvider : IKLineDataProvider
             return [];
         }
 
-        var takeCount = normalizedPeriod == "five-day"
-            ? Math.Clamp(count, 1, 300)
-            : Math.Clamp(count, 1, 1200);
+        var takeCount = Math.Clamp(count, 1, 1200);
         var cacheKey = $"{normalizedSymbol}:{normalizedPeriod}:{takeCount}";
         lock (_cacheSync)
         {

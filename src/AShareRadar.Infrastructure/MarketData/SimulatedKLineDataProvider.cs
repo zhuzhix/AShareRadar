@@ -13,7 +13,9 @@ public sealed class SimulatedKLineDataProvider : IKLineDataProvider
         CancellationToken cancellationToken)
     {
         var normalizedPeriod = NormalizePeriod(period);
-        var takeCount = Math.Clamp(count, 30, 360);
+        var takeCount = normalizedPeriod == "five-day"
+            ? Math.Clamp(count, 30, 1200)
+            : Math.Clamp(count, 30, 360);
         var normalizedSymbol = StockSymbolNormalizer.NormalizeCode(symbol);
         IReadOnlyList<KLineBar> bars = Generate(normalizedSymbol, normalizedPeriod, takeCount);
         return Task.FromResult(bars);
@@ -45,7 +47,7 @@ public sealed class SimulatedKLineDataProvider : IKLineDataProvider
         var step = period switch
         {
             "minute" => TimeSpan.FromMinutes(5),
-            "five-day" => TimeSpan.FromMinutes(5),
+            "five-day" => TimeSpan.FromMinutes(1),
             "m1" => TimeSpan.FromMinutes(1),
             "m5" => TimeSpan.FromMinutes(5),
             "m15" => TimeSpan.FromMinutes(15),

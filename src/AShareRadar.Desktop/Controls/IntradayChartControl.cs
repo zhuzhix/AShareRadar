@@ -31,30 +31,45 @@ public sealed class IntradayChartControl : FrameworkElement
         nameof(TradeMarkers), typeof(IReadOnlyList<KLineTradeMarker>), typeof(IntradayChartControl),
         new FrameworkPropertyMetadata(Array.Empty<KLineTradeMarker>(), FrameworkPropertyMetadataOptions.AffectsRender));
 
-    private static readonly Brush BackgroundBrush = Brush(4, 7, 7);
-    private static readonly Brush PanelBrush = Brush(8, 11, 12);
-    private static readonly Brush GridBrush = Brush(32, 39, 42);
-    private static readonly Brush StrongGridBrush = Brush(68, 74, 77);
-    private static readonly Brush TextBrush = Brush(139, 149, 155);
-    private static readonly Brush MutedTextBrush = Brush(89, 99, 105);
-    private static readonly Brush PriceBrush = Brush(238, 243, 247);
-    private static readonly Brush VwapBrush = Brush(255, 196, 35);
-    private static readonly Brush RisingBrush = Brush(238, 66, 60);
-    private static readonly Brush FallingBrush = Brush(0, 211, 198);
-    private static readonly Brush NeutralBrush = Brush(126, 138, 145);
-    private static readonly Brush DifBrush = Brush(255, 214, 49);
-    private static readonly Brush DeaBrush = Brush(93, 186, 255);
-    private static readonly Brush CrosshairBrush = Brush(183, 193, 202);
-    private static readonly Brush TooltipBrush = new SolidColorBrush(Color.FromArgb(242, 12, 17, 20));
-    private static readonly Brush TooltipBorderBrush = Brush(79, 91, 101);
-    private static readonly Brush BuyBrush = Brush(45, 204, 112);
-    private static readonly Brush StopBrush = Brush(255, 82, 76);
-    private static readonly Brush TakeProfitBrush = Brush(255, 160, 40);
+    public static readonly DependencyProperty ShowTrainingMarkersProperty = DependencyProperty.Register(
+        nameof(ShowTrainingMarkers), typeof(bool), typeof(IntradayChartControl),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    private static readonly Brush BackgroundBrush = Brush(5, 7, 6);
+    private static readonly Brush PanelBrush = Brush(7, 9, 8);
+    private static readonly Brush GridBrush = Brush(24, 29, 29);
+    private static readonly Brush StrongGridBrush = Brush(52, 58, 58);
+    private static readonly Brush TextBrush = Brush(127, 137, 138);
+    private static readonly Brush MutedTextBrush = Brush(94, 104, 105);
+    private static readonly Brush PriceBrush = Brush(191, 196, 198);
+    private static readonly Brush VwapBrush = Brush(176, 160, 0);
+    private static readonly Brush RisingBrush = Brush(224, 69, 63);
+    private static readonly Brush FallingBrush = Brush(0, 191, 174);
+    private static readonly Brush NeutralBrush = Brush(118, 128, 129);
+    private static readonly Brush DifBrush = Brush(218, 188, 48);
+    private static readonly Brush DeaBrush = Brush(78, 156, 214);
+    private static readonly Brush CrosshairBrush = Brush(110, 119, 120);
+    private static readonly Brush TooltipBrush = new SolidColorBrush(Color.FromArgb(238, 10, 14, 14));
+    private static readonly Brush TooltipBorderBrush = Brush(66, 78, 78);
+    private static readonly Brush BuyBrush = Brush(44, 184, 96);
+    private static readonly Brush StopBrush = Brush(224, 69, 63);
+    private static readonly Brush TakeProfitBrush = Brush(220, 135, 36);
+    private static readonly Brush TrainingBuyBrush = Brush(238, 72, 66);
+    private static readonly Brush TrainingSellBrush = Brush(48, 196, 104);
 
     private const double HeaderHeight = 36;
     private const double LeftAxisWidth = 58;
     private const double RightAxisWidth = 60;
     private const double TimeAxisHeight = 22;
+    private const int FiveDaySlotCount = 5;
+    private const double MorningSessionRatio = 0.495;
+    private const double AfternoonSessionStartRatio = 0.505;
+    private const double GridLineThickness = 0.6;
+    private const double StrongGridLineThickness = 1.0;
+    private const double PriceLineThickness = 1.05;
+    private const double VwapLineThickness = 0.9;
+    private const double IndicatorLineThickness = 0.85;
+    private const double CrosshairLineThickness = 0.6;
     private Point? _mousePosition;
 
     public IntradayChartControl()
@@ -100,6 +115,12 @@ public sealed class IntradayChartControl : FrameworkElement
         set => SetValue(TradeMarkersProperty, value);
     }
 
+    public bool ShowTrainingMarkers
+    {
+        get => (bool)GetValue(ShowTrainingMarkersProperty);
+        set => SetValue(ShowTrainingMarkersProperty, value);
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         _mousePosition = e.GetPosition(this);
@@ -124,9 +145,11 @@ public sealed class IntradayChartControl : FrameworkElement
         }
 
         var orderedBars = Candles.OrderBy(item => item.TradingTime).ToArray();
-        var bars = IsFiveDay || orderedBars.Length == 0
+        var bars = orderedBars.Length == 0
             ? orderedBars
-            : orderedBars.Where(item => item.TradingTime.Date == orderedBars[^1].TradingTime.Date).ToArray();
+            : IsFiveDay
+                ? TakeLatestTradingDays(orderedBars, FiveDaySlotCount)
+                : orderedBars.Where(item => item.TradingTime.Date == orderedBars[^1].TradingTime.Date).ToArray();
         var layout = CreateLayout();
         if (bars.Length == 0)
         {
@@ -149,6 +172,7 @@ public sealed class IntradayChartControl : FrameworkElement
         DrawTimeAxis(dc, bars, layout.Price, layout.Macd);
         DrawPriceLines(dc, bars, mapped, vwap, layout.Price, reference, maxDeviation);
         DrawTradeMarkers(dc, bars, mapped, layout.Price, reference, maxDeviation);
+        DrawTrainingMarkers(dc, bars, mapped, layout.Price, reference, maxDeviation);
         DrawLatestMarker(
             dc,
             bars[^1],
@@ -167,13 +191,29 @@ public sealed class IntradayChartControl : FrameworkElement
         var plotLeft = LeftAxisWidth;
         var plotWidth = Math.Max(1, ActualWidth - LeftAxisWidth - RightAxisWidth);
         var contentHeight = ActualHeight - HeaderHeight - TimeAxisHeight;
-        var macdHeight = Math.Max(82, contentHeight * 0.20);
-        var volumeHeight = Math.Max(70, contentHeight * 0.17);
+        var macdHeight = Math.Max(64, contentHeight * 0.16);
+        var volumeHeight = Math.Max(58, contentHeight * 0.15);
         var priceHeight = Math.Max(100, contentHeight - volumeHeight - macdHeight);
         return new Layout(
             new Rect(plotLeft, HeaderHeight, plotWidth, priceHeight),
             new Rect(plotLeft, HeaderHeight + priceHeight, plotWidth, volumeHeight),
             new Rect(plotLeft, HeaderHeight + priceHeight + volumeHeight, plotWidth, macdHeight));
+    }
+
+    private static KLineCandle[] TakeLatestTradingDays(IReadOnlyList<KLineCandle> bars, int dayCount)
+    {
+        if (bars.Count == 0)
+        {
+            return [];
+        }
+
+        var dates = bars
+            .Select(item => item.TradingTime.Date)
+            .Distinct()
+            .OrderBy(item => item)
+            .TakeLast(dayCount)
+            .ToHashSet();
+        return bars.Where(item => dates.Contains(item.TradingTime.Date)).ToArray();
     }
 
     private IReadOnlyList<MappedBar> BuildMappedBars(IReadOnlyList<KLineCandle> bars, Rect rect)
@@ -183,33 +223,44 @@ public sealed class IntradayChartControl : FrameworkElement
             return bars.Select((bar, index) => new MappedBar(bar, MapSingleDayX(bar.TradingTime, rect), index)).ToArray();
         }
 
-        var groups = bars.GroupBy(item => item.TradingTime.Date).OrderBy(group => group.Key).ToArray();
+        var visibleDates = bars
+            .Select(item => item.TradingTime.Date)
+            .Distinct()
+            .OrderBy(item => item)
+            .TakeLast(FiveDaySlotCount)
+            .ToArray();
+        var dateSlots = visibleDates
+            .Select((date, index) => (Date: date, Slot: FiveDaySlotCount - visibleDates.Length + index))
+            .ToDictionary(item => item.Date, item => item.Slot);
         var result = new List<MappedBar>(bars.Count);
-        for (var dayIndex = 0; dayIndex < groups.Length; dayIndex++)
+        for (var index = 0; index < bars.Count; index++)
         {
-            var dayBars = groups[dayIndex].OrderBy(item => item.TradingTime).ToArray();
-            var segmentLeft = rect.Left + rect.Width * dayIndex / groups.Length;
-            var segmentWidth = rect.Width / groups.Length;
-            for (var index = 0; index < dayBars.Length; index++)
+            var bar = bars[index];
+            if (!dateSlots.TryGetValue(bar.TradingTime.Date, out var slot))
             {
-                var ratio = dayBars.Length <= 1 ? 0.5 : (double)index / (dayBars.Length - 1);
-                result.Add(new MappedBar(dayBars[index], segmentLeft + ratio * segmentWidth, result.Count));
+                continue;
             }
+
+            var segmentLeft = rect.Left + rect.Width * slot / FiveDaySlotCount;
+            var segmentWidth = rect.Width / FiveDaySlotCount;
+            result.Add(new MappedBar(bar, segmentLeft + MapTradingSessionRatio(bar.TradingTime) * segmentWidth, index));
         }
 
-        return result.OrderBy(item => item.Bar.TradingTime).ToArray();
+        return result.ToArray();
     }
 
     private static double MapSingleDayX(DateTime time, Rect rect)
+        => rect.Left + MapTradingSessionRatio(time) * rect.Width;
+
+    private static double MapTradingSessionRatio(DateTime time)
     {
         var morning = time.TimeOfDay < TimeSpan.FromHours(12);
         var sessionMinutes = morning
             ? (time.TimeOfDay - new TimeSpan(9, 30, 0)).TotalMinutes
             : (time.TimeOfDay - new TimeSpan(13, 0, 0)).TotalMinutes;
-        var ratio = morning
-            ? Math.Clamp(sessionMinutes / 120d, 0, 1) * 0.495
-            : 0.505 + Math.Clamp(sessionMinutes / 120d, 0, 1) * 0.495;
-        return rect.Left + ratio * rect.Width;
+        return morning
+            ? Math.Clamp(sessionMinutes / 120d, 0, 1) * MorningSessionRatio
+            : AfternoonSessionStartRatio + Math.Clamp(sessionMinutes / 120d, 0, 1) * MorningSessionRatio;
     }
 
     private static decimal[] CalculateVwap(IReadOnlyList<KLineCandle> bars)
@@ -243,11 +294,57 @@ public sealed class IntradayChartControl : FrameworkElement
 
     private static decimal GetMaxDeviation(IReadOnlyList<KLineCandle> bars, IReadOnlyList<decimal> vwap, decimal reference)
     {
-        var deviation = bars.SelectMany(item => new[] { Math.Abs(item.High - reference), Math.Abs(item.Low - reference) })
-            .Concat(vwap.Select(item => Math.Abs(item - reference)))
-            .DefaultIfEmpty(0)
-            .Max();
-        return Math.Max(deviation * 1.08m, Math.Max(reference * 0.005m, 0.01m));
+        var deviations = bars
+            .SelectMany(item => GetValidPricePoints(item, reference))
+            .Concat(vwap.Where(item => IsValidPrice(item, reference)))
+            .Select(item => Math.Abs(item - reference))
+            .Where(item => item >= 0)
+            .OrderBy(item => item)
+            .ToArray();
+        var minimumDeviation = Math.Max(reference * 0.005m, 0.01m);
+        if (deviations.Length == 0)
+        {
+            return minimumDeviation;
+        }
+
+        var maximum = deviations[^1];
+        var percentile98 = deviations[Math.Clamp((int)Math.Floor((deviations.Length - 1) * 0.98), 0, deviations.Length - 1)];
+        var latestDeviation = bars.Count == 0 || !IsValidPrice(bars[^1].Close, reference)
+            ? 0m
+            : Math.Abs(bars[^1].Close - reference);
+        var robustMaximum = deviations.Length >= 40 && percentile98 > 0 && maximum > percentile98 * 2.2m
+            ? Math.Max(percentile98 * 1.18m, latestDeviation * 1.1m)
+            : maximum;
+        return Math.Max(robustMaximum * 1.08m, minimumDeviation);
+    }
+
+    private static IEnumerable<decimal> GetValidPricePoints(KLineCandle bar, decimal reference)
+    {
+        if (bar.High <= 0 || bar.Low <= 0 || bar.Close <= 0 || bar.High < bar.Low)
+        {
+            yield break;
+        }
+
+        if (IsValidPrice(bar.High, reference)) yield return bar.High;
+        if (IsValidPrice(bar.Low, reference)) yield return bar.Low;
+        if (IsValidPrice(bar.Close, reference)) yield return bar.Close;
+        if (IsValidPrice(bar.Open, reference)) yield return bar.Open;
+    }
+
+    private static bool IsValidPrice(decimal value, decimal reference)
+    {
+        if (value <= 0)
+        {
+            return false;
+        }
+
+        if (reference <= 0)
+        {
+            return true;
+        }
+
+        var ratio = value / reference;
+        return ratio is >= 0.35m and <= 2.80m;
     }
 
     private void DrawHeader(DrawingContext dc, IReadOnlyList<KLineCandle> bars, IReadOnlyList<decimal> vwap, decimal reference)
@@ -271,7 +368,7 @@ public sealed class IntradayChartControl : FrameworkElement
         {
             var ratio = row / 8d;
             var y = rect.Top + ratio * rect.Height;
-            var pen = row == 4 ? new Pen(StrongGridBrush, 1) : new Pen(GridBrush, 0.7);
+            var pen = row == 4 ? new Pen(StrongGridBrush, StrongGridLineThickness) : new Pen(GridBrush, GridLineThickness);
             dc.DrawLine(pen, new Point(rect.Left, y), new Point(rect.Right, y));
             var price = reference + maxDeviation * (decimal)(1 - ratio * 2);
             var percent = reference > 0 ? (price - reference) / reference * 100 : 0;
@@ -280,16 +377,19 @@ public sealed class IntradayChartControl : FrameworkElement
             DrawText(dc, $"{percent:+0.00;-0.00;0.00}%", rect.Right + 5, y - 7, 10, brush);
         }
 
-        for (var column = 0; column <= (IsFiveDay ? 5 : 4); column++)
+        for (var column = 0; column <= (IsFiveDay ? FiveDaySlotCount : 4); column++)
         {
-            var x = rect.Left + rect.Width * column / (IsFiveDay ? 5 : 4);
-            dc.DrawLine(new Pen(GridBrush, 0.7), new Point(x, rect.Top), new Point(x, rect.Bottom));
+            var x = rect.Left + rect.Width * column / (IsFiveDay ? FiveDaySlotCount : 4);
+            var pen = IsFiveDay && column > 0 && column < FiveDaySlotCount
+                ? new Pen(StrongGridBrush, 0.75)
+                : new Pen(GridBrush, GridLineThickness);
+            dc.DrawLine(pen, new Point(x, rect.Top), new Point(x, rect.Bottom));
         }
     }
 
     private static void DrawPanel(DrawingContext dc, Rect rect)
     {
-        dc.DrawRectangle(PanelBrush, new Pen(GridBrush, 0.8), rect);
+        dc.DrawRectangle(PanelBrush, new Pen(GridBrush, GridLineThickness), rect);
     }
 
     private static void DrawPanelGrid(DrawingContext dc, Rect rect, int rows)
@@ -298,7 +398,7 @@ public sealed class IntradayChartControl : FrameworkElement
         for (var row = 1; row < rows; row++)
         {
             var y = rect.Top + rect.Height * row / rows;
-            dc.DrawLine(new Pen(GridBrush, 0.7), new Point(rect.Left, y), new Point(rect.Right, y));
+            dc.DrawLine(new Pen(GridBrush, GridLineThickness), new Point(rect.Left, y), new Point(rect.Right, y));
         }
     }
 
@@ -314,10 +414,11 @@ public sealed class IntradayChartControl : FrameworkElement
             return;
         }
 
-        var dates = bars.Select(item => item.TradingTime.Date).Distinct().OrderBy(item => item).ToArray();
+        var dates = bars.Select(item => item.TradingTime.Date).Distinct().OrderBy(item => item).TakeLast(FiveDaySlotCount).ToArray();
+        var startSlot = FiveDaySlotCount - dates.Length;
         for (var index = 0; index < dates.Length; index++)
         {
-            var x = priceRect.Left + priceRect.Width * (index + 0.5) / dates.Length;
+            var x = priceRect.Left + priceRect.Width * (startSlot + index + 0.5) / FiveDaySlotCount;
             DrawCenteredText(dc, dates[index].ToString("MM-dd"), x, macdRect.Bottom + 4, 10, MutedTextBrush);
         }
     }
@@ -325,13 +426,15 @@ public sealed class IntradayChartControl : FrameworkElement
     private static void DrawPriceLines(DrawingContext dc, IReadOnlyList<KLineCandle> bars, IReadOnlyList<MappedBar> mapped,
         IReadOnlyList<decimal> vwap, Rect rect, decimal reference, decimal maxDeviation)
     {
+        dc.PushClip(new RectangleGeometry(rect));
         var priceGeometry = new StreamGeometry();
         using (var context = priceGeometry.Open())
         {
             for (var index = 0; index < mapped.Count; index++)
             {
-                var point = new Point(mapped[index].X, MapPriceY(bars[index].Close, rect, reference, maxDeviation));
-                if (index == 0 || bars[index].TradingTime.Date != bars[index - 1].TradingTime.Date)
+                var barIndex = mapped[index].Index;
+                var point = new Point(mapped[index].X, MapPriceY(bars[barIndex].Close, rect, reference, maxDeviation));
+                if (index == 0 || mapped[index].Bar.TradingTime.Date != mapped[index - 1].Bar.TradingTime.Date)
                 {
                     context.BeginFigure(point, false, false);
                 }
@@ -342,15 +445,16 @@ public sealed class IntradayChartControl : FrameworkElement
             }
         }
         priceGeometry.Freeze();
-        dc.DrawGeometry(null, new Pen(PriceBrush, 1.25), priceGeometry);
+        dc.DrawGeometry(null, new Pen(PriceBrush, PriceLineThickness), priceGeometry);
 
         var vwapGeometry = new StreamGeometry();
         using (var context = vwapGeometry.Open())
         {
             for (var index = 0; index < mapped.Count; index++)
             {
-                var point = new Point(mapped[index].X, MapPriceY(vwap[index], rect, reference, maxDeviation));
-                if (index == 0 || bars[index].TradingTime.Date != bars[index - 1].TradingTime.Date)
+                var barIndex = mapped[index].Index;
+                var point = new Point(mapped[index].X, MapPriceY(vwap[barIndex], rect, reference, maxDeviation));
+                if (index == 0 || mapped[index].Bar.TradingTime.Date != mapped[index - 1].Bar.TradingTime.Date)
                 {
                     context.BeginFigure(point, false, false);
                 }
@@ -361,20 +465,23 @@ public sealed class IntradayChartControl : FrameworkElement
             }
         }
         vwapGeometry.Freeze();
-        dc.DrawGeometry(null, new Pen(VwapBrush, 1), vwapGeometry);
+        dc.DrawGeometry(null, new Pen(VwapBrush, VwapLineThickness), vwapGeometry);
+        dc.Pop();
     }
 
     private static void DrawVolume(DrawingContext dc, IReadOnlyList<KLineCandle> bars, IReadOnlyList<MappedBar> mapped, Rect rect)
     {
         var max = bars.Max(item => item.Volume);
         if (max <= 0) return;
-        var width = Math.Max(1, Math.Min(5, rect.Width / Math.Max(1, mapped.Count) * 0.72));
-        for (var index = 0; index < bars.Count; index++)
+        var widthBase = IsMappedFiveDay(mapped) ? FiveDaySlotCount * 240 : mapped.Count;
+        var width = Math.Max(1, Math.Min(4, rect.Width / Math.Max(1, widthBase) * 0.72));
+        for (var index = 0; index < mapped.Count; index++)
         {
-            var height = (double)(bars[index].Volume / max) * (rect.Height - 5);
-            var firstBarOfDay = index == 0 || bars[index].TradingTime.Date != bars[index - 1].TradingTime.Date;
-            var comparison = firstBarOfDay ? bars[index].Open : bars[index - 1].Close;
-            var brush = ChangeBrush(bars[index].Close, comparison);
+            var barIndex = mapped[index].Index;
+            var height = (double)(bars[barIndex].Volume / max) * (rect.Height - 5);
+            var firstBarOfDay = barIndex == 0 || bars[barIndex].TradingTime.Date != bars[barIndex - 1].TradingTime.Date;
+            var comparison = firstBarOfDay ? bars[barIndex].Open : bars[barIndex - 1].Close;
+            var brush = ChangeBrush(bars[barIndex].Close, comparison);
             dc.DrawRectangle(brush, null, new Rect(mapped[index].X - width / 2, rect.Bottom - height, width, height));
         }
         DrawText(dc, $"VOL {FormatLargeNumber(bars[^1].Volume)}", rect.Left + 6, rect.Top + 4, 10, TextBrush);
@@ -386,12 +493,14 @@ public sealed class IntradayChartControl : FrameworkElement
         var maximum = values.SelectMany(item => new[] { Math.Abs(item.Dif), Math.Abs(item.Dea), Math.Abs(item.Bar) }).DefaultIfEmpty(0.01m).Max();
         maximum = Math.Max(maximum, 0.0001m);
         var zeroY = rect.Top + rect.Height / 2;
-        dc.DrawLine(new Pen(StrongGridBrush, 0.8), new Point(rect.Left, zeroY), new Point(rect.Right, zeroY));
-        var barWidth = Math.Max(1, Math.Min(4, rect.Width / Math.Max(1, mapped.Count) * 0.65));
+        dc.DrawLine(new Pen(StrongGridBrush, 0.75), new Point(rect.Left, zeroY), new Point(rect.Right, zeroY));
+        var widthBase = IsMappedFiveDay(mapped) ? FiveDaySlotCount * 240 : mapped.Count;
+        var barWidth = Math.Max(1, Math.Min(4, rect.Width / Math.Max(1, widthBase) * 0.65));
         for (var index = 0; index < mapped.Count; index++)
         {
-            var barY = MapMacdY(values[index].Bar, rect, maximum);
-            dc.DrawRectangle(values[index].Bar >= 0 ? RisingBrush : FallingBrush, null,
+            var value = values[mapped[index].Index];
+            var barY = MapMacdY(value.Bar, rect, maximum);
+            dc.DrawRectangle(value.Bar >= 0 ? RisingBrush : FallingBrush, null,
                 new Rect(mapped[index].X - barWidth / 2, Math.Min(zeroY, barY), barWidth, Math.Max(1, Math.Abs(zeroY - barY))));
         }
         DrawSeries(dc, mapped, values.Select(item => item.Dif).ToArray(), rect, maximum, DifBrush);
@@ -437,14 +546,14 @@ public sealed class IntradayChartControl : FrameworkElement
         using var context = geometry.Open();
         for (var index = 0; index < mapped.Count; index++)
         {
-            var point = new Point(mapped[index].X, MapMacdY(values[index], rect, maximum));
+            var point = new Point(mapped[index].X, MapMacdY(values[mapped[index].Index], rect, maximum));
             if (index == 0 || mapped[index].Bar.TradingTime.Date != mapped[index - 1].Bar.TradingTime.Date)
                 context.BeginFigure(point, false, false);
             else
                 context.LineTo(point, true, false);
         }
         geometry.Freeze();
-        dc.DrawGeometry(null, new Pen(brush, 0.9), geometry);
+        dc.DrawGeometry(null, new Pen(brush, IndicatorLineThickness), geometry);
     }
 
     private void DrawTradeMarkers(DrawingContext dc, IReadOnlyList<KLineCandle> bars, IReadOnlyList<MappedBar> mapped,
@@ -454,18 +563,74 @@ public sealed class IntradayChartControl : FrameworkElement
         {
             var index = FindNearestBarIndex(bars, marker.TradingTime);
             if (index < 0) continue;
+            var mappedMarker = mapped.FirstOrDefault(item => item.Index == index);
+            if (mappedMarker is null) continue;
             var brush = marker.MarkerType switch
             {
                 "StopLoss" => StopBrush,
                 "TakeProfit" => TakeProfitBrush,
                 _ => BuyBrush
             };
-            var x = mapped[index].X;
+            var x = mappedMarker.X;
             var y = MapPriceY(marker.Price, rect, reference, maxDeviation);
             if (y < rect.Top || y > rect.Bottom) continue;
-            dc.DrawEllipse(brush, new Pen(BackgroundBrush, 1), new Point(x, y), 4, 4);
+            dc.DrawEllipse(brush, new Pen(BackgroundBrush, 0.9), new Point(x, y), 3.6, 3.6);
             DrawText(dc, marker.Label, x + 6, Math.Max(rect.Top, y - 14), 10, brush, FontWeights.SemiBold);
         }
+    }
+
+    private void DrawTrainingMarkers(
+        DrawingContext dc,
+        IReadOnlyList<KLineCandle> bars,
+        IReadOnlyList<MappedBar> mapped,
+        Rect rect,
+        decimal reference,
+        decimal maxDeviation)
+    {
+        if (!ShowTrainingMarkers || bars.Count < 24 || mapped.Count == 0)
+        {
+            return;
+        }
+
+        var markers = TrainingTradeMarkerCalculator.Calculate(bars);
+        if (markers.Count == 0)
+        {
+            return;
+        }
+
+        var mappedByIndex = mapped.ToDictionary(item => item.Index, item => item);
+        foreach (var marker in markers)
+        {
+            if (!mappedByIndex.TryGetValue(marker.Index, out var mappedMarker))
+            {
+                continue;
+            }
+
+            var y = MapPriceY(marker.Price, rect, reference, maxDeviation);
+            DrawTrainingMarkerText(dc, rect, marker, mappedMarker.X, y);
+        }
+    }
+
+    private static void DrawTrainingMarkerText(
+        DrawingContext dc,
+        Rect rect,
+        TrainingTradeMarker marker,
+        double x,
+        double priceY)
+    {
+        var isBuy = marker.MarkerType == "B";
+        var brush = isBuy ? TrainingBuyBrush : TrainingSellBrush;
+        var fontSize = 15 + (double)Math.Min(2m, marker.Strength - 1m);
+        var formatted = CreateText(marker.MarkerType, fontSize, brush, FontWeights.Black);
+        var y = isBuy
+            ? Math.Clamp(priceY + 5, rect.Top + 2, rect.Bottom - formatted.Height - 2)
+            : Math.Clamp(priceY - formatted.Height - 5, rect.Top + 2, rect.Bottom - formatted.Height - 2);
+        var origin = new Point(x - formatted.Width / 2, y);
+        var shadow = new SolidColorBrush(Color.FromArgb(210, 0, 0, 0));
+        shadow.Freeze();
+
+        dc.DrawText(CreateText(marker.MarkerType, fontSize, shadow, FontWeights.Black), new Point(origin.X + 1, origin.Y + 1));
+        dc.DrawText(formatted, origin);
     }
 
     private static void DrawLatestMarker(
@@ -480,7 +645,7 @@ public sealed class IntradayChartControl : FrameworkElement
         var y = MapPriceY(last.Close, rect, axisReference, maxDeviation);
         var brush = ChangeBrush(last.Close, changeReference);
         dc.DrawEllipse(brush, null, new Point(x, y), 2.5, 2.5);
-        dc.DrawLine(new Pen(brush, 0.7) { DashStyle = DashStyles.Dash }, new Point(x, y), new Point(rect.Right, y));
+        dc.DrawLine(new Pen(brush, 0.6) { DashStyle = DashStyles.Dash }, new Point(x, y), new Point(rect.Right, y));
         dc.DrawRectangle(brush, null, new Rect(rect.Right + 2, y - 9, 55, 18));
         DrawText(dc, last.Close.ToString("F2"), rect.Right + 6, y - 7, 10, BackgroundBrush, FontWeights.SemiBold);
     }
@@ -491,22 +656,23 @@ public sealed class IntradayChartControl : FrameworkElement
         if (_mousePosition is not { } mouse || !new Rect(layout.Price.Left, layout.Price.Top, layout.Price.Width, layout.Macd.Bottom - layout.Price.Top).Contains(mouse))
             return;
 
-        var index = mapped.Select((item, i) => (Distance: Math.Abs(item.X - mouse.X), Index: i)).MinBy(item => item.Distance).Index;
-        var x = mapped[index].X;
-        var y = MapPriceY(bars[index].Close, layout.Price, reference, maxDeviation);
-        var pen = new Pen(CrosshairBrush, 0.7) { DashStyle = DashStyles.Dash };
+        var mappedIndex = mapped.Select((item, i) => (Distance: Math.Abs(item.X - mouse.X), Index: i)).MinBy(item => item.Distance).Index;
+        var barIndex = mapped[mappedIndex].Index;
+        var x = mapped[mappedIndex].X;
+        var y = MapPriceY(bars[barIndex].Close, layout.Price, reference, maxDeviation);
+        var pen = new Pen(CrosshairBrush, CrosshairLineThickness) { DashStyle = DashStyles.Dash };
         dc.DrawLine(pen, new Point(x, layout.Price.Top), new Point(x, layout.Macd.Bottom));
         dc.DrawLine(pen, new Point(layout.Price.Left, y), new Point(layout.Price.Right, y));
 
-        var bar = bars[index];
-        var dailyReference = GetDailyReference(bars, index, reference);
+        var bar = bars[barIndex];
+        var dailyReference = GetDailyReference(bars, barIndex, reference);
         var change = dailyReference > 0 ? (bar.Close - dailyReference) / dailyReference * 100 : 0;
-        var text = $"{bar.TradingTime:yyyy-MM-dd HH:mm}\n价格  {bar.Close:F2}    均价  {vwap[index]:F2}\n涨跌  {change:+0.00;-0.00;0.00}%    成交量  {FormatLargeNumber(bar.Volume)}\n成交额  {FormatAmount(bar.Amount)}";
+        var text = $"{bar.TradingTime:yyyy-MM-dd HH:mm}\n价格  {bar.Close:F2}    均价  {vwap[barIndex]:F2}\n涨跌  {change:+0.00;-0.00;0.00}%    成交量  {FormatLargeNumber(bar.Volume)}\n成交额  {FormatAmount(bar.Amount)}";
         const double tooltipWidth = 226;
         const double tooltipHeight = 78;
         var left = mouse.X > layout.Price.Left + layout.Price.Width / 2 ? layout.Price.Left + 8 : layout.Price.Right - tooltipWidth - 8;
         var top = layout.Price.Top + 8;
-        dc.DrawRectangle(TooltipBrush, new Pen(TooltipBorderBrush, 1), new Rect(left, top, tooltipWidth, tooltipHeight));
+        dc.DrawRectangle(TooltipBrush, new Pen(TooltipBorderBrush, 0.9), new Rect(left, top, tooltipWidth, tooltipHeight));
         DrawText(dc, text, left + 9, top + 7, 11, PriceBrush);
     }
 
@@ -534,10 +700,15 @@ public sealed class IntradayChartControl : FrameworkElement
     }
 
     private static double MapPriceY(decimal value, Rect rect, decimal reference, decimal maximum)
-        => rect.Top + (double)((reference + maximum - value) / (maximum * 2)) * rect.Height;
+        => maximum <= 0
+            ? rect.Top + rect.Height / 2
+            : rect.Top + (double)((reference + maximum - value) / (maximum * 2)) * rect.Height;
 
     private static double MapMacdY(decimal value, Rect rect, decimal maximum)
         => rect.Top + rect.Height / 2 - (double)(value / maximum) * (rect.Height * 0.44);
+
+    private static bool IsMappedFiveDay(IReadOnlyList<MappedBar> mapped)
+        => mapped.Select(item => item.Bar.TradingTime.Date).Distinct().Take(2).Count() > 1;
 
     private static Brush ChangeBrush(decimal value, decimal reference)
         => value > reference ? RisingBrush : value < reference ? FallingBrush : NeutralBrush;

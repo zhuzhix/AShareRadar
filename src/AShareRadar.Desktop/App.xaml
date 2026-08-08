@@ -5,10 +5,455 @@
              StartupUri="MainWindow.xaml">
     <Application.Resources>
         <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/SkinDefault.xaml" />
-                <ResourceDictionary Source="pack://application:,,,/HandyControl;component/Themes/Theme.xaml" />
-            </ResourceDictionary.MergedDictionaries>
+            <SolidColorBrush x:Key="PageBackgroundBrush" Color="#080D19" />
+            <SolidColorBrush x:Key="PanelBrush" Color="#0D1424" />
+            <SolidColorBrush x:Key="SoftPanelBrush" Color="#121C32" />
+            <SolidColorBrush x:Key="CardBrush" Color="#17233B" />
+            <SolidColorBrush x:Key="CardDarkBrush" Color="#090E19" />
+            <SolidColorBrush x:Key="BorderBrushSoft" Color="#243451" />
+            <SolidColorBrush x:Key="TextBrush" Color="#F8FAFC" />
+            <SolidColorBrush x:Key="MutedTextBrush" Color="#8EA6CF" />
+            <SolidColorBrush x:Key="SubtleTextBrush" Color="#59719A" />
+            <SolidColorBrush x:Key="PrimaryBrush" Color="#F6C409" />
+            <SolidColorBrush x:Key="PrimarySoftBrush" Color="#2F2B13" />
+            <SolidColorBrush x:Key="AccentBlueBrush" Color="#4F7BFF" />
+            <SolidColorBrush x:Key="SuccessBrush" Color="#00D6B0" />
+            <SolidColorBrush x:Key="WarningBrush" Color="#FF9A3D" />
+            <SolidColorBrush x:Key="DangerBrush" Color="#FF6575" />
+            <SolidColorBrush x:Key="TableRowBrush" Color="#101A2E" />
+            <SolidColorBrush x:Key="TableAltRowBrush" Color="#17213A" />
+            <SolidColorBrush x:Key="TableHoverBrush" Color="#1E2C4E" />
+            <SolidColorBrush x:Key="TableSelectedBrush" Color="#233257" />
+            <SolidColorBrush x:Key="InputBrush" Color="#090E19" />
+            <SolidColorBrush x:Key="InputHoverBrush" Color="#111B2D" />
+            <SolidColorBrush x:Key="ButtonSurfaceBrush" Color="#121C32" />
+            <SolidColorBrush x:Key="ButtonHoverBrush" Color="#1B2946" />
+            <SolidColorBrush x:Key="ComboBackgroundBrush" Color="#0B1322" />
+            <SolidColorBrush x:Key="ComboHoverBrush" Color="#111B2D" />
+            <SolidColorBrush x:Key="ComboItemHoverBrush" Color="#858583" />
+            <SolidColorBrush x:Key="ComboTextBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="SelectedTextOnPrimaryBrush" Color="#0B1322" />
+            <SolidColorBrush x:Key="ScrollBarTrackBrush" Color="#0B1322" />
+            <SolidColorBrush x:Key="ScrollBarThumbBrush" Color="#8A8D92" />
+            <SolidColorBrush x:Key="ScrollBarThumbHoverBrush" Color="#A1A4AA" />
+            <SolidColorBrush x:Key="ScrollBarArrowBrush" Color="#8A8D92" />
+
+            <Style x:Key="RadarComboBoxItemStyle" TargetType="ComboBoxItem">
+                <Setter Property="MinHeight" Value="33" />
+                <Setter Property="Padding" Value="24,0" />
+                <Setter Property="Foreground" Value="{DynamicResource ComboTextBrush}" />
+                <Setter Property="Background" Value="{DynamicResource ComboHoverBrush}" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBoxItem">
+                            <Border x:Name="ItemChrome"
+                                    Background="{TemplateBinding Background}"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}"
+                                                  TextElement.FontSize="{TemplateBinding FontSize}"
+                                                  TextElement.FontWeight="{TemplateBinding FontWeight}"
+                                                  RecognizesAccessKey="True" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource ComboItemHoverBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter TargetName="ItemChrome" Property="Background" Value="{DynamicResource ComboItemHoverBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Foreground" Value="#77839A" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="RadarComboBoxStyle" TargetType="ComboBox">
+                <Setter Property="Height" Value="32" />
+                <Setter Property="MinWidth" Value="96" />
+                <Setter Property="Padding" Value="22,0,38,0" />
+                <Setter Property="Foreground" Value="{DynamicResource ComboTextBrush}" />
+                <Setter Property="Background" Value="{DynamicResource ComboBackgroundBrush}" />
+                <Setter Property="BorderBrush" Value="#E0BB17" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="MaxDropDownHeight" Value="360" />
+                <Setter Property="ItemContainerStyle" Value="{StaticResource RadarComboBoxItemStyle}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBox">
+                            <Grid>
+                                <ToggleButton x:Name="ToggleButton"
+                                              Focusable="False"
+                                              Background="{TemplateBinding Background}"
+                                              BorderBrush="{TemplateBinding BorderBrush}"
+                                              BorderThickness="{TemplateBinding BorderThickness}"
+                                              Padding="{TemplateBinding Padding}"
+                                              IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                              ClickMode="Press">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Chrome"
+                                                    Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                    CornerRadius="10">
+                                                <Grid>
+                                                    <ContentPresenter Margin="{TemplateBinding Padding}"
+                                                                      HorizontalAlignment="Left"
+                                                                      VerticalAlignment="Center"
+                                                                      TextElement.Foreground="{DynamicResource ComboTextBrush}"
+                                                                      TextElement.FontSize="{Binding FontSize, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                                      TextElement.FontWeight="{Binding FontWeight, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                                                      RecognizesAccessKey="True" />
+                                                    <Path HorizontalAlignment="Right"
+                                                          VerticalAlignment="Center"
+                                                          Margin="0,0,11,0"
+                                                          Data="M 0 0 L 6 6 L 12 0"
+                                                          Stroke="{DynamicResource ComboTextBrush}"
+                                                          StrokeThickness="2"
+                                                          StrokeStartLineCap="Round"
+                                                          StrokeEndLineCap="Round"
+                                                          Fill="Transparent" />
+                                                </Grid>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource ComboHoverBrush}" />
+                                                    <Setter TargetName="Chrome" Property="BorderBrush" Value="#EACB23" />
+                                                </Trigger>
+                                                <Trigger Property="IsPressed" Value="True">
+                                                    <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource ComboHoverBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                    <TextBlock Text="{TemplateBinding SelectionBoxItem}"
+                                               Margin="0"
+                                               Foreground="{TemplateBinding Foreground}"
+                                               FontSize="{TemplateBinding FontSize}"
+                                               FontWeight="{TemplateBinding FontWeight}"
+                                               VerticalAlignment="Center"
+                                               HorizontalAlignment="Left"
+                                               TextTrimming="CharacterEllipsis" />
+                                </ToggleButton>
+                                <Popup x:Name="Popup"
+                                       Placement="Bottom"
+                                       IsOpen="{TemplateBinding IsDropDownOpen}"
+                                       AllowsTransparency="True"
+                                       Focusable="False"
+                                       PopupAnimation="Fade">
+                                    <Border Margin="0,6,0,0"
+                                            MinWidth="{TemplateBinding ActualWidth}"
+                                            MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                            Background="{DynamicResource ComboHoverBrush}"
+                                            BorderBrush="#CBD5E1"
+                                            BorderThickness="1"
+                                            CornerRadius="0">
+                                        <ScrollViewer CanContentScroll="True">
+                                            <ItemsPresenter />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style TargetType="ComboBox" BasedOn="{StaticResource RadarComboBoxStyle}" />
+            <Style TargetType="ComboBoxItem" BasedOn="{StaticResource RadarComboBoxItemStyle}" />
+
+            <Style x:Key="ReviewCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="Padding" Value="18" />
+            </Style>
+
+            <Style x:Key="ReviewDarkCardStyle" TargetType="Border" BasedOn="{StaticResource ReviewCardStyle}">
+                <Setter Property="Background" Value="{DynamicResource CardDarkBrush}" />
+            </Style>
+
+            <Style x:Key="ReviewPillStyle" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource SoftPanelBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="16" />
+                <Setter Property="Padding" Value="12,5" />
+            </Style>
+
+            <Style x:Key="ReviewFilterBarStyle" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource SoftPanelBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="14,10" />
+            </Style>
+
+            <Style x:Key="ReviewSectionHeaderStyle" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource CardDarkBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="18,14" />
+            </Style>
+
+            <Style x:Key="ReviewAccordionCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource CardDarkBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="18" />
+                <Setter Property="Margin" Value="0,0,0,12" />
+            </Style>
+
+            <Style x:Key="ReviewTabButtonStyle" TargetType="Button">
+                <Setter Property="Height" Value="42" />
+                <Setter Property="MinWidth" Value="104" />
+                <Setter Property="Padding" Value="18,0" />
+                <Setter Property="Margin" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Chrome"
+                                    Background="{TemplateBinding Background}"
+                                    CornerRadius="7"
+                                    Margin="3">
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  RecognizesAccessKey="True" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SoftPanelBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="ReviewTabSelectedButtonStyle" TargetType="Button" BasedOn="{StaticResource ReviewTabButtonStyle}">
+                <Setter Property="Background" Value="{DynamicResource PrimaryBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource SelectedTextOnPrimaryBrush}" />
+            </Style>
+
+            <Style x:Key="ReviewDataGridStyle" TargetType="DataGrid">
+                <Setter Property="AutoGenerateColumns" Value="False" />
+                <Setter Property="IsReadOnly" Value="True" />
+                <Setter Property="CanUserAddRows" Value="False" />
+                <Setter Property="CanUserDeleteRows" Value="False" />
+                <Setter Property="CanUserReorderColumns" Value="True" />
+                <Setter Property="CanUserResizeColumns" Value="True" />
+                <Setter Property="CanUserSortColumns" Value="True" />
+                <Setter Property="HeadersVisibility" Value="Column" />
+                <Setter Property="GridLinesVisibility" Value="Horizontal" />
+                <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+                <Setter Property="RowBackground" Value="{DynamicResource TableRowBrush}" />
+                <Setter Property="AlternatingRowBackground" Value="{DynamicResource TableAltRowBrush}" />
+                <Setter Property="AlternationCount" Value="2" />
+                <Setter Property="RowHeight" Value="52" />
+                <Setter Property="ColumnHeaderHeight" Value="42" />
+                <Setter Property="SelectionMode" Value="Single" />
+                <Setter Property="SelectionUnit" Value="FullRow" />
+                <Setter Property="EnableRowVirtualization" Value="True" />
+                <Setter Property="EnableColumnVirtualization" Value="True" />
+                <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+                <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+                <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+                <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+                <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            </Style>
+
+            <Style TargetType="DataGridColumnHeader">
+                <Setter Property="Background" Value="{DynamicResource SoftPanelBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrushSoft}" />
+                <Setter Property="BorderThickness" Value="0,0,0,1" />
+                <Setter Property="Padding" Value="12,0" />
+                <Setter Property="HorizontalContentAlignment" Value="Left" />
+            </Style>
+
+            <Style TargetType="DataGridCell">
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="12,0" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource TableSelectedBrush}" />
+                        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style TargetType="DataGridRow">
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                <Setter Property="Cursor" Value="Hand" />
+                <Style.Triggers>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource TableSelectedBrush}" />
+                        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                    </Trigger>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource TableHoverBrush}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style x:Key="RadarScrollBarButtonStyle" TargetType="RepeatButton">
+                <Setter Property="Width" Value="14" />
+                <Setter Property="Height" Value="16" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{DynamicResource ScrollBarArrowBrush}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Focusable" Value="False" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RepeatButton">
+                            <Border Background="{TemplateBinding Background}">
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}"
+                                                  TextElement.FontSize="10"
+                                                  TextElement.FontWeight="SemiBold" />
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="RadarScrollBarThumbStyle" TargetType="Thumb">
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Thumb">
+                            <Border x:Name="ThumbChrome"
+                                    Margin="4,2"
+                                    Background="{DynamicResource ScrollBarThumbBrush}"
+                                    CornerRadius="6" />
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="ThumbChrome" Property="Background" Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsDragging" Value="True">
+                                    <Setter TargetName="ThumbChrome" Property="Background" Value="{DynamicResource ScrollBarThumbHoverBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style TargetType="ScrollBar">
+                <Setter Property="MinWidth" Value="14" />
+                <Setter Property="Background" Value="{DynamicResource ScrollBarTrackBrush}" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ScrollBar">
+                            <Grid MinWidth="14"
+                                  Background="{TemplateBinding Background}"
+                                  SnapsToDevicePixels="True">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="16" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="16" />
+                                </Grid.RowDefinitions>
+                                <RepeatButton Grid.Row="0"
+                                              Content="▲"
+                                              Command="ScrollBar.LineUpCommand"
+                                              Style="{StaticResource RadarScrollBarButtonStyle}" />
+                                <Track x:Name="PART_Track"
+                                       Grid.Row="1"
+                                       IsDirectionReversed="True">
+                                    <Track.DecreaseRepeatButton>
+                                        <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" />
+                                    </Track.DecreaseRepeatButton>
+                                    <Track.Thumb>
+                                        <Thumb Style="{StaticResource RadarScrollBarThumbStyle}" />
+                                    </Track.Thumb>
+                                    <Track.IncreaseRepeatButton>
+                                        <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" />
+                                    </Track.IncreaseRepeatButton>
+                                </Track>
+                                <RepeatButton Grid.Row="2"
+                                              Content="▼"
+                                              Command="ScrollBar.LineDownCommand"
+                                              Style="{StaticResource RadarScrollBarButtonStyle}" />
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="Orientation" Value="Horizontal">
+                        <Setter Property="Height" Value="14" />
+                        <Setter Property="MinHeight" Value="14" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ScrollBar">
+                                    <Grid Height="{TemplateBinding Height}"
+                                          Background="{TemplateBinding Background}"
+                                          SnapsToDevicePixels="True">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="16" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="16" />
+                                        </Grid.ColumnDefinitions>
+                                        <RepeatButton Grid.Column="0"
+                                                      Content="◀"
+                                                      Command="ScrollBar.LineLeftCommand"
+                                                      Style="{StaticResource RadarScrollBarButtonStyle}" />
+                                        <Track x:Name="PART_Track" Grid.Column="1">
+                                            <Track.DecreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageLeftCommand" Opacity="0" Focusable="False" />
+                                            </Track.DecreaseRepeatButton>
+                                            <Track.Thumb>
+                                                <Thumb Style="{StaticResource RadarScrollBarThumbStyle}" />
+                                            </Track.Thumb>
+                                            <Track.IncreaseRepeatButton>
+                                                <RepeatButton Command="ScrollBar.PageRightCommand" Opacity="0" Focusable="False" />
+                                            </Track.IncreaseRepeatButton>
+                                        </Track>
+                                        <RepeatButton Grid.Column="2"
+                                                      Content="▶"
+                                                      Command="ScrollBar.LineRightCommand"
+                                                      Style="{StaticResource RadarScrollBarButtonStyle}" />
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private string _opportunityView = "Current";
     private string _kLinePeriod = "day";
     private string _indicatorMode = "MACD";
+    private bool _showTrainingMarkers;
     private bool _showSectorHeat;
     private bool _showConceptHeat;
     private bool _showMarketSentiment;
@@ -76,6 +77,7 @@ public partial class MainWindow : Window
         BacktestStartDatePicker.SelectedDate = DateTime.Today.AddDays(-60);
         BacktestEndDatePicker.SelectedDate = DateTime.Today;
         StockPoolHitDatePicker.SelectedDate = DateTime.Today;
+        UpdateThemeToggleText();
         ApplyWorkspaceVisibility();
         ApplyKLineButtonStyles();
 
@@ -103,6 +105,18 @@ public partial class MainWindow : Window
             _latestBackgroundJobId = response?.JobId;
             await RefreshBackgroundJobStatusAsync(token);
         });
+    }
+
+    private void ThemeToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        ThemeService.Toggle();
+        UpdateThemeToggleText();
+    }
+
+    private void UpdateThemeToggleText()
+    {
+        ThemeToggleButton.Content = ThemeService.CurrentTheme == AppTheme.Dark ? "暗色" : "亮色";
+        ThemeToggleButton.ToolTip = ThemeService.CurrentTheme == AppTheme.Dark ? "切换到亮色皮肤" : "切换到暗色皮肤";
     }
 
     private async void InitializeMappingBrowser()
@@ -1077,6 +1091,7 @@ public partial class MainWindow : Window
             _dailyHitItems = dailyHits;
             _dailyHitCount = dailyHits.Length;
             PopulateDailyHitFilters(dailyHits);
+            UpdateDailyHitMetrics(dailyHits);
             ApplyDailyHitFilters();
             DailyHitSummaryText.Text = dailyHits.Length == 0
                 ? $"{tradingDate:yyyy-MM-dd} 当前日期暂无每日命中，可切换日期或等待扫描。"
@@ -1098,10 +1113,29 @@ public partial class MainWindow : Window
             _dailyHitItems = [];
             DailyHitDataGrid.ItemsSource = null;
             _dailyHitCount = 0;
+            UpdateDailyHitMetrics([]);
             ClearDailyHitKLine();
             DailyHitSummaryText.Text = $"每日命中加载失败：{ex.Message}";
             ApplyWorkspaceVisibility();
         }
+    }
+
+    private void UpdateDailyHitMetrics(IReadOnlyList<DailyHitDisplay> items)
+    {
+        DailyHitTotalMetricText.Text = items.Count.ToString();
+        DailyHitStrategyMetricText.Text = items
+            .SelectMany(item => item.StrategyNames)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count()
+            .ToString();
+
+        var pending = items.Count(item => item.ManualStatusText.Contains("未", StringComparison.OrdinalIgnoreCase)
+            || item.ManualStatusText.Contains("待", StringComparison.OrdinalIgnoreCase));
+        DailyHitPendingMetricText.Text = pending.ToString();
+        DailyHitRateMetricText.Text = items.Count == 0
+            ? "--"
+            : $"{Math.Round(items.Count(item => item.Score >= 80m) * 100m / items.Count):F0}%";
     }
 
     private void PopulateDailyHitFilters(IReadOnlyList<DailyHitDisplay> items)
@@ -1286,6 +1320,18 @@ public partial class MainWindow : Window
     private async void RsiIndicatorButton_Click(object sender, RoutedEventArgs e)
     {
         await SetIndicatorModeAsync("RSI");
+    }
+
+    private void TrainingMarkerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsTrainingMarkerPeriod(_kLinePeriod))
+        {
+            return;
+        }
+
+        _showTrainingMarkers = !_showTrainingMarkers;
+        ApplyChartMode();
+        ApplyKLineButtonStyles();
     }
 
     private async void OpportunityListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -2372,12 +2418,14 @@ public partial class MainWindow : Window
         {
             LongTermTrackingSummaryText.Text = "暂无长期跟踪数据。";
             LongTermTrackingDataGrid.ItemsSource = null;
+            UpdateLongTermTrackingMetrics(null);
             return;
         }
 
         LongTermTrackingSummaryText.Text = result.TotalCount == 0
             ? "暂无标的 / 策略组合"
             : $"{result.TotalCount} 个标的 / 策略组合";
+        UpdateLongTermTrackingMetrics(result);
         LongTermTrackingDataGrid.ItemsSource = result.Items
             .Select(item => new LongTermTrackingDisplay(
                 item.Id,
@@ -2394,6 +2442,35 @@ public partial class MainWindow : Window
                 BuildLongTermTrackingTags(item),
                 item.LatestRisk ?? "--"))
             .ToArray();
+    }
+
+    private void UpdateLongTermTrackingMetrics(LongTermTrackingQueryResultDto? result)
+    {
+        if (result is null)
+        {
+            LongTermTrackingTotalMetricText.Text = "0";
+            LongTermTrackingStrategyMetricText.Text = "0";
+            LongTermTrackingTodayMetricText.Text = "0";
+            LongTermTrackingPendingMetricText.Text = "0";
+            return;
+        }
+
+        var items = result.Items;
+        LongTermTrackingTotalMetricText.Text = result.TotalCount.ToString();
+        LongTermTrackingStrategyMetricText.Text = items
+            .Select(item => string.IsNullOrWhiteSpace(item.StrategyCode) ? item.StrategyName : item.StrategyCode)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count()
+            .ToString();
+
+        var today = DateTime.Today;
+        LongTermTrackingTodayMetricText.Text = items
+            .Count(item => item.LastHitAt.ToLocalTime().Date == today)
+            .ToString();
+        LongTermTrackingPendingMetricText.Text = items
+            .Count(item => !string.IsNullOrWhiteSpace(item.LatestRisk) && item.LatestRisk != "--")
+            .ToString();
     }
 
     private static string BuildLongTermHitRangeText(DateTimeOffset firstHitAt, DateTimeOffset lastHitAt)
@@ -2687,23 +2764,23 @@ public partial class MainWindow : Window
             ? (Style)FindResource("PrimaryButtonStyle")
             : (Style)FindResource("PageTabButtonStyle");
         HistoryStatsViewButton.Style = _showHistory
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
         PredictionReviewViewButton.Style = _showPredictionReview
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
         LongTermTrackingViewButton.Style = _showLongTermTracking
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
         StrategyCenterViewButton.Style = _showStrategyCenter
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
         BacktestViewButton.Style = _showBacktest
             ? (Style)FindResource("PrimaryButtonStyle")
             : (Style)FindResource("PageTabButtonStyle");
         StockPoolsViewButton.Style = _showStockPools
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
     }
 
     private void ApplyKLineButtonStyles()
@@ -2725,6 +2802,8 @@ public partial class MainWindow : Window
         SetSelectionStyle(MacdIndicatorButton, _indicatorMode == "MACD", selectedStyle, normalStyle);
         SetSelectionStyle(KdjIndicatorButton, _indicatorMode == "KDJ", selectedStyle, normalStyle);
         SetSelectionStyle(RsiIndicatorButton, _indicatorMode == "RSI", selectedStyle, normalStyle);
+        SetSelectionStyle(TrainingMarkerButton, _showTrainingMarkers && IsTrainingMarkerPeriod(_kLinePeriod), selectedStyle, normalStyle);
+        TrainingMarkerButton.IsEnabled = IsTrainingMarkerPeriod(_kLinePeriod);
     }
 
     private static void SetSelectionStyle(Button button, bool selected, Style selectedStyle, Style normalStyle)
@@ -2983,7 +3062,7 @@ public partial class MainWindow : Window
         return period switch
         {
             "minute" => 240,
-            "five-day" => 240,
+            "five-day" => 1200,
             "m1" => 240,
             "m5" => 240,
             "m15" => 192,
@@ -3046,9 +3125,14 @@ public partial class MainWindow : Window
         KdjIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
         RsiIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
         MacdIndicatorButton.IsEnabled = !intraday;
+        var showTrainingMarkers = _showTrainingMarkers && IsTrainingMarkerPeriod(_kLinePeriod);
+        KLineChart.ShowTrainingMarkers = showTrainingMarkers;
+        IntradayChart.ShowTrainingMarkers = showTrainingMarkers;
     }
 
     private static bool IsIntradayPeriod(string period) => period is "minute" or "five-day";
+
+    private static bool IsTrainingMarkerPeriod(string period) => period is not ("week" or "month");
 
     private static string BuildChartPrompt(string period) => IsIntradayPeriod(period)
         ? "选择股票后显示分时价格、均价、成交量与 MACD。"
@@ -3063,12 +3147,21 @@ public partial class MainWindow : Window
             return 0m;
         }
 
-        var firstDate = intradayBars.Min(item => item.TradingTime.Date);
+        var referenceDate = intradayBars.Max(item => item.TradingTime.Date);
         var previous = dailyBars
-            .Where(item => item.TradingTime.Date < firstDate)
+            .Where(item => item.TradingTime.Date < referenceDate)
             .OrderBy(item => item.TradingTime)
             .LastOrDefault();
-        return previous?.Close > 0 ? previous.Close : intradayBars[0].Open;
+        if (previous?.Close > 0)
+        {
+            return previous.Close;
+        }
+
+        var firstBarOfReferenceDate = intradayBars
+            .Where(item => item.TradingTime.Date == referenceDate)
+            .OrderBy(item => item.TradingTime)
+            .FirstOrDefault();
+        return firstBarOfReferenceDate?.Open > 0 ? firstBarOfReferenceDate.Open : intradayBars[0].Open;
     }
 
     private static bool IsRealtimePoolOpportunity(OpportunityDisplay item)
@@ -3218,6 +3311,7 @@ public partial class MainWindow : Window
     {
         Cursor = enabled ? Cursors.Arrow : Cursors.Wait;
         UpdateHistoryDataButton.IsEnabled = enabled;
+        ThemeToggleButton.IsEnabled = enabled;
         UpdateMarketMappingButton.IsEnabled = enabled;
         WatchButton.IsEnabled = enabled;
         FocusButton.IsEnabled = enabled;
@@ -3274,6 +3368,7 @@ public partial class MainWindow : Window
         MacdIndicatorButton.IsEnabled = enabled;
         KdjIndicatorButton.IsEnabled = enabled;
         RsiIndicatorButton.IsEnabled = enabled;
+        TrainingMarkerButton.IsEnabled = enabled && IsTrainingMarkerPeriod(_kLinePeriod);
     }
 
     private string BuildHistoryFilterText()

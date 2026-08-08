@@ -14,6 +14,7 @@ public partial class KLineFloatingWindow : Window
     private SignalEventDto? _latestEvent;
     private string _period = "day";
     private string _indicatorMode = "MACD";
+    private bool _showTrainingMarkers;
 
     public KLineFloatingWindow(RadarApiClient apiClient)
     {
@@ -189,6 +190,8 @@ public partial class KLineFloatingWindow : Window
         SetSelectionStyle(MacdIndicatorButton, _indicatorMode == "MACD", selectedStyle, normalStyle);
         SetSelectionStyle(KdjIndicatorButton, _indicatorMode == "KDJ", selectedStyle, normalStyle);
         SetSelectionStyle(RsiIndicatorButton, _indicatorMode == "RSI", selectedStyle, normalStyle);
+        SetSelectionStyle(TrainingMarkerButton, _showTrainingMarkers && IsTrainingMarkerPeriod(_period), selectedStyle, normalStyle);
+        TrainingMarkerButton.IsEnabled = IsTrainingMarkerPeriod(_period);
         ApplyChartMode();
     }
 
@@ -223,6 +226,18 @@ public partial class KLineFloatingWindow : Window
 
     private async void RsiIndicatorButton_Click(object sender, RoutedEventArgs e) => await SetIndicatorModeAsync("RSI");
 
+    private void TrainingMarkerButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!IsTrainingMarkerPeriod(_period))
+        {
+            return;
+        }
+
+        _showTrainingMarkers = !_showTrainingMarkers;
+        ApplyChartMode();
+        ApplyButtonStyles();
+    }
+
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RunWindowActionAsync(RefreshKLineAsync);
 
     private static int GetKLineCount(string period)
@@ -230,7 +245,7 @@ public partial class KLineFloatingWindow : Window
         return period switch
         {
             "minute" => 240,
-            "five-day" => 240,
+            "five-day" => 1200,
             "m1" => 240,
             "m5" => 240,
             "m15" => 180,
@@ -267,9 +282,14 @@ public partial class KLineFloatingWindow : Window
         KdjIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
         RsiIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
         MacdIndicatorButton.IsEnabled = !intraday;
+        var showTrainingMarkers = _showTrainingMarkers && IsTrainingMarkerPeriod(_period);
+        KLineChart.ShowTrainingMarkers = showTrainingMarkers;
+        IntradayChart.ShowTrainingMarkers = showTrainingMarkers;
     }
 
     private static bool IsIntradayPeriod(string period) => period is "minute" or "five-day";
+
+    private static bool IsTrainingMarkerPeriod(string period) => period is not ("week" or "month");
 
     private static decimal ResolvePreviousClose(
         IReadOnlyList<KLineCandle> intradayBars,
@@ -280,12 +300,21 @@ public partial class KLineFloatingWindow : Window
             return 0m;
         }
 
-        var firstDate = intradayBars.Min(item => item.TradingTime.Date);
+        var referenceDate = intradayBars.Max(item => item.TradingTime.Date);
         var previous = dailyBars
-            .Where(item => item.TradingTime.Date < firstDate)
+            .Where(item => item.TradingTime.Date < referenceDate)
             .OrderBy(item => item.TradingTime)
             .LastOrDefault();
-        return previous?.Close > 0 ? previous.Close : intradayBars[0].Open;
+        if (previous?.Close > 0)
+        {
+            return previous.Close;
+        }
+
+        var firstBarOfReferenceDate = intradayBars
+            .Where(item => item.TradingTime.Date == referenceDate)
+            .OrderBy(item => item.TradingTime)
+            .FirstOrDefault();
+        return firstBarOfReferenceDate?.Open > 0 ? firstBarOfReferenceDate.Open : intradayBars[0].Open;
     }
 
     private static IReadOnlyList<KLineTradeMarker> BuildTradeMarkers(SignalEventDto? latestEvent)

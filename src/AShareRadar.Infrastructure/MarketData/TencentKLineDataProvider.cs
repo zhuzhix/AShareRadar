@@ -141,7 +141,7 @@ public sealed class TencentKLineDataProvider : IKLineDataProvider
         var tencentPeriod = period switch
         {
             "minute" => "m1",
-            "five-day" => "m5",
+            "five-day" => "m1",
             "m1" => "m1",
             "m5" => "m5",
             "m15" => "m15",
@@ -191,7 +191,7 @@ public sealed class TencentKLineDataProvider : IKLineDataProvider
         return period switch
         {
             "minute" => ["m1", "data"],
-            "five-day" => ["m5", "data"],
+            "five-day" => ["m1", "data"],
             "m1" => ["m1", "data"],
             "m5" => ["m5", "data"],
             "m15" => ["m15", "data"],

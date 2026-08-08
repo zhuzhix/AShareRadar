@@ -382,7 +382,7 @@ public sealed class EastMoneyQuantDotNetClient
         return SimulatedKLineDataProvider.NormalizePeriod(period) switch
         {
             "minute" => "60s",
-            "five-day" => "300s",
+            "five-day" => "60s",
             "m1" => "60s",
             "m5" => "300s",
             "m15" => "900s",

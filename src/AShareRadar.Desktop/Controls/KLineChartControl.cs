@@ -45,35 +45,50 @@ public sealed class KLineChartControl : FrameworkElement
         typeof(KLineChartControl),
         new FrameworkPropertyMetadata(Array.Empty<KLineTradeMarker>(), FrameworkPropertyMetadataOptions.AffectsRender));
 
-    private static readonly Brush BackgroundBrush = new SolidColorBrush(Color.FromRgb(4, 7, 7));
-    private static readonly Brush PanelBrush = new SolidColorBrush(Color.FromRgb(7, 9, 10));
-    private static readonly Brush GridBrush = new SolidColorBrush(Color.FromRgb(30, 34, 36));
-    private static readonly Brush StrongGridBrush = new SolidColorBrush(Color.FromRgb(48, 52, 55));
-    private static readonly Brush TextBrush = new SolidColorBrush(Color.FromRgb(130, 139, 145));
-    private static readonly Brush MutedTextBrush = new SolidColorBrush(Color.FromRgb(84, 93, 98));
-    private static readonly Brush RisingBrush = new SolidColorBrush(Color.FromRgb(222, 52, 47));
-    private static readonly Brush FallingBrush = new SolidColorBrush(Color.FromRgb(0, 214, 214));
-    private static readonly Brush Ma5Brush = new SolidColorBrush(Color.FromRgb(223, 223, 30));
-    private static readonly Brush Ma10Brush = new SolidColorBrush(Color.FromRgb(255, 150, 24));
-    private static readonly Brush Ma20Brush = new SolidColorBrush(Color.FromRgb(218, 49, 224));
-    private static readonly Brush Ma30Brush = new SolidColorBrush(Color.FromRgb(0, 197, 55));
-    private static readonly Brush Ma60Brush = new SolidColorBrush(Color.FromRgb(139, 145, 150));
-    private static readonly Brush Ma120Brush = new SolidColorBrush(Color.FromRgb(0, 173, 190));
-    private static readonly Brush Ma250Brush = new SolidColorBrush(Color.FromRgb(203, 198, 86));
-    private static readonly Brush ChipYellowBrush = new SolidColorBrush(Color.FromRgb(255, 196, 0));
-    private static readonly Brush ChipOrangeBrush = new SolidColorBrush(Color.FromRgb(255, 122, 0));
-    private static readonly Brush ChipPinkBrush = new SolidColorBrush(Color.FromRgb(255, 24, 142));
-    private static readonly Brush CrosshairBrush = new SolidColorBrush(Color.FromRgb(185, 194, 204));
-    private static readonly Brush TooltipBackgroundBrush = new SolidColorBrush(Color.FromArgb(232, 12, 16, 20));
-    private static readonly Brush TooltipBorderBrush = new SolidColorBrush(Color.FromRgb(76, 88, 102));
-    private static readonly Brush BuyMarkerBrush = new SolidColorBrush(Color.FromRgb(52, 199, 89));
-    private static readonly Brush SellMarkerBrush = new SolidColorBrush(Color.FromRgb(255, 149, 0));
-    private static readonly Brush StopMarkerBrush = new SolidColorBrush(Color.FromRgb(255, 69, 58));
+    public static readonly DependencyProperty ShowTrainingMarkersProperty = DependencyProperty.Register(
+        nameof(ShowTrainingMarkers),
+        typeof(bool),
+        typeof(KLineChartControl),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    private static readonly Brush BackgroundBrush = new SolidColorBrush(Color.FromRgb(5, 7, 6));
+    private static readonly Brush PanelBrush = new SolidColorBrush(Color.FromRgb(7, 9, 8));
+    private static readonly Brush GridBrush = new SolidColorBrush(Color.FromRgb(24, 29, 29));
+    private static readonly Brush StrongGridBrush = new SolidColorBrush(Color.FromRgb(52, 58, 58));
+    private static readonly Brush TextBrush = new SolidColorBrush(Color.FromRgb(127, 137, 138));
+    private static readonly Brush MutedTextBrush = new SolidColorBrush(Color.FromRgb(94, 104, 105));
+    private static readonly Brush RisingBrush = new SolidColorBrush(Color.FromRgb(224, 69, 63));
+    private static readonly Brush FallingBrush = new SolidColorBrush(Color.FromRgb(0, 191, 174));
+    private static readonly Brush Ma5Brush = new SolidColorBrush(Color.FromRgb(204, 194, 40));
+    private static readonly Brush Ma10Brush = new SolidColorBrush(Color.FromRgb(224, 132, 36));
+    private static readonly Brush Ma20Brush = new SolidColorBrush(Color.FromRgb(190, 72, 196));
+    private static readonly Brush Ma30Brush = new SolidColorBrush(Color.FromRgb(42, 174, 82));
+    private static readonly Brush Ma60Brush = new SolidColorBrush(Color.FromRgb(132, 142, 142));
+    private static readonly Brush Ma120Brush = new SolidColorBrush(Color.FromRgb(24, 150, 164));
+    private static readonly Brush Ma250Brush = new SolidColorBrush(Color.FromRgb(176, 170, 82));
+    private static readonly Brush ChipYellowBrush = new SolidColorBrush(Color.FromRgb(230, 182, 0));
+    private static readonly Brush ChipOrangeBrush = new SolidColorBrush(Color.FromRgb(220, 126, 28));
+    private static readonly Brush ChipPinkBrush = new SolidColorBrush(Color.FromRgb(220, 42, 132));
+    private static readonly Brush CrosshairBrush = new SolidColorBrush(Color.FromRgb(110, 119, 120));
+    private static readonly Brush TooltipBackgroundBrush = new SolidColorBrush(Color.FromArgb(238, 10, 14, 14));
+    private static readonly Brush TooltipBorderBrush = new SolidColorBrush(Color.FromRgb(66, 78, 78));
+    private static readonly Brush BuyMarkerBrush = new SolidColorBrush(Color.FromRgb(44, 184, 96));
+    private static readonly Brush SellMarkerBrush = new SolidColorBrush(Color.FromRgb(220, 135, 36));
+    private static readonly Brush StopMarkerBrush = new SolidColorBrush(Color.FromRgb(224, 69, 63));
+    private static readonly Brush TrainingBuyBrush = new SolidColorBrush(Color.FromRgb(238, 72, 66));
+    private static readonly Brush TrainingSellBrush = new SolidColorBrush(Color.FromRgb(48, 196, 104));
+    private static readonly Brush PriceCalloutBrush = new SolidColorBrush(Color.FromRgb(191, 196, 198));
     private const double ChartLeft = 2d;
     private const double HeaderHeight = 30d;
     private const double ChipPanelWidth = 190d;
     private const double ChartRightGap = 58d;
     private const double ChipPanelGap = 46d;
+    private const double GridLineThickness = 0.6d;
+    private const double StrongGridLineThickness = 0.9d;
+    private const double CandleLineThickness = 0.9d;
+    private const double MovingAverageLineThickness = 0.9d;
+    private const double CrosshairLineThickness = 0.6d;
+    private const double IndicatorLineThickness = 0.85d;
 
     private Point? _mousePosition;
     private Point? _dragStartPoint;
@@ -122,6 +137,12 @@ public sealed class KLineChartControl : FrameworkElement
     {
         get => (IReadOnlyList<KLineTradeMarker>)GetValue(TradeMarkersProperty);
         set => SetValue(TradeMarkersProperty, value);
+    }
+
+    public bool ShowTrainingMarkers
+    {
+        get => (bool)GetValue(ShowTrainingMarkersProperty);
+        set => SetValue(ShowTrainingMarkersProperty, value);
     }
 
     private static void OnCandlesChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs e)
@@ -174,6 +195,7 @@ public sealed class KLineChartControl : FrameworkElement
         DrawMovingAverage(dc, candles, chartRect, 120, Ma120Brush);
         DrawMovingAverage(dc, candles, chartRect, 250, Ma250Brush);
         DrawTradeMarkers(dc, candles, chartRect);
+        DrawTrainingMarkers(dc, candles, chartRect);
         DrawHighLowMarkers(dc, candles, chartRect);
         DrawVolume(dc, candles, volumeRect);
         DrawIndicatorPanel(dc, candles, macdRect);
@@ -265,7 +287,7 @@ public sealed class KLineChartControl : FrameworkElement
         DrawGrid(dc, chartRect, 6, 7);
         DrawGrid(dc, volumeRect, 2, 7);
         DrawGrid(dc, macdRect, 2, 7);
-        dc.DrawRectangle(null, new Pen(GridBrush, 1), chipRect);
+        dc.DrawRectangle(null, new Pen(GridBrush, GridLineThickness), chipRect);
         DrawText(dc, "暂无真实 K 线数据", chartRect.Left + 18, chartRect.Top + 24, 14, TextBrush);
         DrawText(dc, "请检查分钟行情数据源，当前不会使用模拟价格代替。", chartRect.Left + 18, chartRect.Top + 52, 12, TextBrush);
     }
@@ -274,7 +296,7 @@ public sealed class KLineChartControl : FrameworkElement
     {
         var latest = candles[^1];
         dc.DrawRectangle(PanelBrush, null, new Rect(0, 0, ActualWidth, HeaderHeight));
-        dc.DrawLine(new Pen(StrongGridBrush, 1), new Point(0, HeaderHeight - 1), new Point(ActualWidth, HeaderHeight - 1));
+        dc.DrawLine(new Pen(StrongGridBrush, StrongGridLineThickness), new Point(0, HeaderHeight - 1), new Point(ActualWidth, HeaderHeight - 1));
 
         var x = 6d;
         DrawInlineText(dc, ref x, $"{SymbolName}  {PeriodName}  前复权  ", 12, ChipYellowBrush, 7);
@@ -293,8 +315,8 @@ public sealed class KLineChartControl : FrameworkElement
 
     private static void DrawGrid(DrawingContext dc, Rect rect, int rows, int columns)
     {
-        var pen = new Pen(GridBrush, 1);
-        dc.DrawRectangle(null, new Pen(StrongGridBrush, 1), rect);
+        var pen = new Pen(GridBrush, GridLineThickness);
+        dc.DrawRectangle(null, new Pen(StrongGridBrush, StrongGridLineThickness), rect);
 
         for (var i = 1; i < rows; i++)
         {
@@ -313,7 +335,7 @@ public sealed class KLineChartControl : FrameworkElement
     {
         var (minPrice, maxPrice) = GetPriceRange(candles);
         var step = rect.Width / candles.Count;
-        var candleWidth = Math.Clamp(step * 0.54, 3, 10);
+        var candleWidth = Math.Clamp(step * 0.50, 2.6, 9);
 
         for (var i = 0; i < candles.Count; i++)
         {
@@ -325,7 +347,7 @@ public sealed class KLineChartControl : FrameworkElement
             var closeY = MapY(item.Close, minPrice, maxPrice, rect);
             var rising = item.Close >= item.Open;
             var brush = rising ? RisingBrush : FallingBrush;
-            var pen = new Pen(brush, 1);
+            var pen = new Pen(brush, CandleLineThickness);
 
             dc.DrawLine(pen, new Point(x, highY), new Point(x, lowY));
 
@@ -365,7 +387,7 @@ public sealed class KLineChartControl : FrameworkElement
             }
         }
 
-        dc.DrawGeometry(null, new Pen(brush, 1), geometry);
+        dc.DrawGeometry(null, new Pen(brush, MovingAverageLineThickness), geometry);
     }
 
     private void DrawTradeMarkers(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
@@ -394,11 +416,11 @@ public sealed class KLineChartControl : FrameworkElement
                 "StopLoss" => StopMarkerBrush,
                 _ => TextBrush
             };
-            var pen = new Pen(brush, 1.2);
+            var pen = new Pen(brush, 1.0);
 
             if (marker.MarkerType is "TakeProfit" or "StopLoss")
             {
-                dc.DrawLine(new Pen(brush, 1) { DashStyle = DashStyles.Dash }, new Point(rect.Left, y), new Point(rect.Right, y));
+                dc.DrawLine(new Pen(brush, 0.75) { DashStyle = DashStyles.Dash }, new Point(rect.Left, y), new Point(rect.Right, y));
             }
 
             var triangle = new StreamGeometry();
@@ -421,6 +443,56 @@ public sealed class KLineChartControl : FrameworkElement
             dc.DrawGeometry(brush, pen, triangle);
             dc.DrawLine(pen, new Point(rect.Right - 10, y), new Point(rect.Right + 4, y));
         }
+    }
+
+    private void DrawTrainingMarkers(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
+    {
+        if (!ShowTrainingMarkers || candles.Count < 24)
+        {
+            return;
+        }
+
+        var markers = TrainingTradeMarkerCalculator.Calculate(candles);
+        if (markers.Count == 0)
+        {
+            return;
+        }
+
+        var (minPrice, maxPrice) = GetPriceRange(candles);
+        var step = rect.Width / candles.Count;
+        foreach (var marker in markers)
+        {
+            if (marker.Index < 0 || marker.Index >= candles.Count)
+            {
+                continue;
+            }
+
+            var x = rect.Left + step * marker.Index + step / 2;
+            var y = MapY(marker.Price, minPrice, maxPrice, rect);
+            DrawTrainingMarkerText(dc, rect, marker, x, y);
+        }
+    }
+
+    private static void DrawTrainingMarkerText(
+        DrawingContext dc,
+        Rect rect,
+        TrainingTradeMarker marker,
+        double x,
+        double priceY)
+    {
+        var isBuy = marker.MarkerType == "B";
+        var brush = isBuy ? TrainingBuyBrush : TrainingSellBrush;
+        var fontSize = 15 + (double)Math.Min(2m, marker.Strength - 1m);
+        var formatted = CreateText(marker.MarkerType, fontSize, brush, FontWeights.Black);
+        var y = isBuy
+            ? Math.Clamp(priceY + 5, rect.Top + 2, rect.Bottom - formatted.Height - 2)
+            : Math.Clamp(priceY - formatted.Height - 5, rect.Top + 2, rect.Bottom - formatted.Height - 2);
+        var origin = new Point(x - formatted.Width / 2, y);
+        var shadow = new SolidColorBrush(Color.FromArgb(210, 0, 0, 0));
+        shadow.Freeze();
+
+        dc.DrawText(CreateText(marker.MarkerType, fontSize, shadow, FontWeights.Black), new Point(origin.X + 1, origin.Y + 1));
+        dc.DrawText(formatted, origin);
     }
 
     private static void DrawHighLowMarkers(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
@@ -468,17 +540,17 @@ public sealed class KLineChartControl : FrameworkElement
         var tickEnd = leftSide ? x - 26 : x + 26;
         var labelX = leftSide ? x - 68 : x + 8;
         var labelY = Math.Clamp(y + (high ? -20 : 4), rect.Top + 2, rect.Bottom - 16);
-        var pen = new Pen(Brushes.White, 1);
+        var pen = new Pen(PriceCalloutBrush, 0.85);
 
         dc.DrawLine(pen, new Point(x, y), new Point(tickEnd, y));
-        DrawText(dc, leftSide ? $"{price:F2}→" : label, labelX, labelY, 11, Brushes.White);
+        DrawText(dc, leftSide ? $"{price:F2}→" : label, labelX, labelY, 11, PriceCalloutBrush);
     }
 
     private static void DrawVolume(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
     {
         var maxVolume = Math.Max(1, candles.Max(item => item.Volume));
         var step = rect.Width / candles.Count;
-        var barWidth = Math.Clamp(step * 0.58, 3, 10);
+        var barWidth = Math.Clamp(step * 0.48, 2.4, 8);
 
         var headerX = rect.Left + 2;
         DrawInlineText(dc, ref headerX, $"VOL(5,10) VOLUME:{candles[^1].Volume / 10000m:F2}万  ", 12, TextBrush, rect.Top + 4);
@@ -612,7 +684,7 @@ public sealed class KLineChartControl : FrameworkElement
         max += padding;
 
         var zeroY = MapRangeY(0m, min, max, rect);
-        dc.DrawLine(new Pen(GridBrush, 1), new Point(rect.Left, zeroY), new Point(rect.Right, zeroY));
+        dc.DrawLine(new Pen(StrongGridBrush, 0.75), new Point(rect.Left, zeroY), new Point(rect.Right, zeroY));
 
         var step = rect.Width / points.Count;
         var difPoints = new PointCollection();
@@ -625,7 +697,7 @@ public sealed class KLineChartControl : FrameworkElement
             {
                 var barY = MapRangeY(bar, min, max, rect);
                 var brush = bar >= 0 ? RisingBrush : FallingBrush;
-                dc.DrawLine(new Pen(brush, 1), new Point(x, zeroY), new Point(x, barY));
+                dc.DrawLine(new Pen(brush, 0.85), new Point(x, zeroY), new Point(x, barY));
             }
 
             if (point.Value1 is { } dif)
@@ -807,7 +879,7 @@ public sealed class KLineChartControl : FrameworkElement
 
     private static void DrawIndicatorReferenceLines(DrawingContext dc, Rect rect)
     {
-        var pen = new Pen(GridBrush, 1);
+        var pen = new Pen(GridBrush, GridLineThickness);
         dc.DrawLine(pen, new Point(rect.Left, MapIndicatorY(80, rect)), new Point(rect.Right, MapIndicatorY(80, rect)));
         dc.DrawLine(pen, new Point(rect.Left, MapIndicatorY(50, rect)), new Point(rect.Right, MapIndicatorY(50, rect)));
         dc.DrawLine(pen, new Point(rect.Left, MapIndicatorY(20, rect)), new Point(rect.Right, MapIndicatorY(20, rect)));
@@ -824,7 +896,7 @@ public sealed class KLineChartControl : FrameworkElement
 
     private static void DrawChipDistribution(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect, (decimal Min, decimal Max) priceRange)
     {
-        dc.DrawRectangle(BackgroundBrush, new Pen(GridBrush, 1), rect);
+        dc.DrawRectangle(BackgroundBrush, new Pen(GridBrush, GridLineThickness), rect);
 
         if (candles.Count == 0)
         {
@@ -873,15 +945,15 @@ public sealed class KLineChartControl : FrameworkElement
         var currentY = MapChipY(latestClose, priceRange.Min, priceRange.Max, distributionRect);
         var peakY = MapChipY(distributionResult.PeakPrice, priceRange.Min, priceRange.Max, distributionRect);
         var averageY = MapChipY(distributionResult.AverageCost, priceRange.Min, priceRange.Max, distributionRect);
-        dc.DrawLine(new Pen(Brushes.White, 1), new Point(barLeft, peakY), new Point(barRight, peakY));
-        dc.DrawLine(new Pen(RisingBrush, 1) { DashStyle = DashStyles.Dash }, new Point(barLeft, currentY), new Point(barRight, currentY));
-        dc.DrawLine(new Pen(Ma60Brush, 1) { DashStyle = DashStyles.Dash }, new Point(barLeft, averageY), new Point(barRight, averageY));
+        dc.DrawLine(new Pen(PriceCalloutBrush, 0.85), new Point(barLeft, peakY), new Point(barRight, peakY));
+        dc.DrawLine(new Pen(RisingBrush, 0.8) { DashStyle = DashStyles.Dash }, new Point(barLeft, currentY), new Point(barRight, currentY));
+        dc.DrawLine(new Pen(Ma60Brush, 0.8) { DashStyle = DashStyles.Dash }, new Point(barLeft, averageY), new Point(barRight, averageY));
 
         DrawChipPriceLabels(dc, distributionRect, labelWidth, priceRange.Min, priceRange.Max, headerRect, footerRect);
 
-        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(225, 15, 19, 26)), new Pen(TooltipBorderBrush, 1), headerRect);
-        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(210, 15, 19, 26)), null, footerRect);
-        DrawText(dc, "筹码分布", headerRect.Left + 7, headerRect.Top + 5, 11, Brushes.White);
+        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(225, 10, 14, 14)), new Pen(TooltipBorderBrush, 0.9), headerRect);
+        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(210, 10, 14, 14)), null, footerRect);
+        DrawText(dc, "筹码分布", headerRect.Left + 7, headerRect.Top + 5, 11, PriceCalloutBrush);
         DrawText(dc, $"主峰 {distributionResult.PeakPrice:F2}", headerRect.Left + 7, headerRect.Top + 22, 10, ChipPinkBrush);
         DrawText(dc, $"获利 {distributionResult.WinnerRate:F1}%", headerRect.Left + 92, headerRect.Top + 22, 10, ChipYellowBrush);
         DrawChipStats(dc, footerRect, distributionResult, candles[^1].TradingTime);
@@ -1148,7 +1220,7 @@ public sealed class KLineChartControl : FrameworkElement
             points.Add(new Point(barLeft + width, y));
         }
 
-        DrawPolyline(dc, points, Brushes.White);
+        DrawPolyline(dc, points, PriceCalloutBrush);
     }
 
     private static void DrawChipStats(
@@ -1181,7 +1253,7 @@ public sealed class KLineChartControl : FrameworkElement
         Rect footerRect)
     {
         var mid = (min + max) / 2m;
-        var pen = new Pen(GridBrush, 1);
+        var pen = new Pen(GridBrush, GridLineThickness);
 
         var lastLabelBottom = double.NegativeInfinity;
         foreach (var price in new[] { max, mid, min })
@@ -1308,7 +1380,7 @@ public sealed class KLineChartControl : FrameworkElement
         var candle = candles[index];
         var x = chartRect.Left + step * index + step / 2;
         var y = Math.Clamp(point.Y, chartRect.Top, macdRect.Bottom);
-        var pen = new Pen(CrosshairBrush, 1) { DashStyle = DashStyles.Dash };
+        var pen = new Pen(CrosshairBrush, CrosshairLineThickness) { DashStyle = DashStyles.Dash };
 
         dc.DrawLine(pen, new Point(x, chartRect.Top), new Point(x, macdRect.Bottom));
         dc.DrawLine(pen, new Point(chartRect.Left, y), new Point(chartRect.Right, y));
@@ -1327,7 +1399,7 @@ public sealed class KLineChartControl : FrameworkElement
     private static void DrawPriceMarker(DrawingContext dc, Point point, Rect chartRect, decimal price)
     {
         var markerRect = new Rect(chartRect.Right + 2, Math.Clamp(point.Y - 9, chartRect.Top, chartRect.Bottom - 18), 54, 18);
-        dc.DrawRectangle(TooltipBackgroundBrush, new Pen(TooltipBorderBrush, 1), markerRect);
+        dc.DrawRectangle(TooltipBackgroundBrush, new Pen(TooltipBorderBrush, 0.9), markerRect);
         DrawText(dc, $"{price:F2}", markerRect.Left + 7, markerRect.Top + 2, 11, TextBrush);
     }
 
@@ -1335,7 +1407,7 @@ public sealed class KLineChartControl : FrameworkElement
     {
         var text = candle.TradingTime.ToString("MM-dd HH:mm");
         var markerRect = new Rect(Math.Clamp(x - 42, macdRect.Left, macdRect.Right - 84), macdRect.Bottom - 20, 84, 18);
-        dc.DrawRectangle(TooltipBackgroundBrush, new Pen(TooltipBorderBrush, 1), markerRect);
+        dc.DrawRectangle(TooltipBackgroundBrush, new Pen(TooltipBorderBrush, 0.9), markerRect);
         DrawText(dc, text, markerRect.Left + 6, markerRect.Top + 2, 11, TextBrush);
     }
 
@@ -1349,7 +1421,7 @@ public sealed class KLineChartControl : FrameworkElement
         var rect = new Rect(x, y, tooltipWidth, tooltipHeight);
         var color = candle.Close >= candle.Open ? RisingBrush : FallingBrush;
 
-        dc.DrawRectangle(TooltipBackgroundBrush, new Pen(TooltipBorderBrush, 1), rect);
+        dc.DrawRectangle(TooltipBackgroundBrush, new Pen(TooltipBorderBrush, 0.9), rect);
         DrawText(dc, candle.TradingTime.ToString("yyyy-MM-dd HH:mm"), x + 10, y + 8, 11, TextBrush);
         DrawText(dc, $"开  {candle.Open:F2}", x + 10, y + 28, 11, TextBrush);
         DrawText(dc, $"高  {candle.High:F2}", x + 10, y + 44, 11, TextBrush);
@@ -1409,37 +1481,31 @@ public sealed class KLineChartControl : FrameworkElement
             }
         }
 
-        dc.DrawGeometry(null, new Pen(brush, 1), geometry);
+        dc.DrawGeometry(null, new Pen(brush, IndicatorLineThickness), geometry);
     }
 
     private static void DrawText(DrawingContext dc, string text, double x, double y, double size, Brush brush)
     {
-        var formattedText = new FormattedText(
-            text,
-            System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),
-            FlowDirection.LeftToRight,
-            new Typeface("Microsoft YaHei UI"),
-            size,
-            brush,
-            1.0);
-
-        dc.DrawText(formattedText, new Point(x, y));
+        dc.DrawText(CreateText(text, size, brush, FontWeights.Normal), new Point(x, y));
     }
 
     private static void DrawInlineText(DrawingContext dc, ref double x, string text, double size, Brush brush, double y)
     {
-        var formattedText = new FormattedText(
-            text,
-            System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),
-            FlowDirection.LeftToRight,
-            new Typeface("Microsoft YaHei UI"),
-            size,
-            brush,
-            1.0);
+        var formattedText = CreateText(text, size, brush, FontWeights.Normal);
 
         dc.DrawText(formattedText, new Point(x, y));
         x += formattedText.WidthIncludingTrailingWhitespace;
     }
+
+    private static FormattedText CreateText(string text, double size, Brush brush, FontWeight weight)
+        => new(
+            text,
+            System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),
+            FlowDirection.LeftToRight,
+            new Typeface(new FontFamily("Microsoft YaHei UI"), FontStyles.Normal, weight, FontStretches.Normal),
+            size,
+            brush,
+            1.0);
 
     private static double MapY(decimal value, decimal min, decimal max, Rect rect)
     {

@@ -75,6 +75,7 @@
                     <Button x:Name="MacdIndicatorButton" Content="MACD" Style="{StaticResource ChartToolbarSelectedButtonStyle}" Click="MacdIndicatorButton_Click" />
                     <Button x:Name="KdjIndicatorButton" Content="KDJ" Style="{StaticResource ChartToolbarButtonStyle}" Click="KdjIndicatorButton_Click" />
                     <Button x:Name="RsiIndicatorButton" Content="RSI" Style="{StaticResource ChartToolbarButtonStyle}" Click="RsiIndicatorButton_Click" />
+                    <Button x:Name="TrainingMarkerButton" Content="训练" Width="54" Style="{StaticResource ChartToolbarButtonStyle}" Click="TrainingMarkerButton_Click" />
                     <Button Width="54" Content="刷新" Style="{StaticResource ChartToolbarButtonStyle}" Click="RefreshButton_Click" />
                 </StackPanel>
             </DockPanel>

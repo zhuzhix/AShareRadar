@@ -2,6 +2,7 @@
 using System.Data;
 using System.Windows;
 using System.Windows.Threading;
+using AShareRadar.Desktop.Services;
 using NLog;
 
 namespace AShareRadar.Desktop;
@@ -18,6 +19,7 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+        ThemeService.Apply(ThemeService.LoadSavedTheme(), save: false);
         base.OnStartup(e);
         Logger.Info(
             "Desktop started. Version={Version} BaseDirectory={BaseDirectory} ProcessId={ProcessId} OS={OS} Runtime={Runtime}",
