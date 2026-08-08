@@ -2094,10 +2094,14 @@
                                     <TextBlock x:Name="ChartCaptionText" Margin="0,2,0,0" Foreground="#69747A" FontSize="11" Text="选择左侧机会后显示对应个股走势、均线、成交量、MACD 与筹码分布。" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
 
-                                <controls:KLineChartControl x:Name="KLineChart"
-                                                            Grid.Row="2"
-                                                            SymbolName="未选择"
-                                                            PeriodName="日线" />
+                                <Grid Grid.Row="2">
+                                    <controls:KLineChartControl x:Name="KLineChart"
+                                                                 SymbolName="未选择"
+                                                                 PeriodName="日线" />
+                                    <controls:IntradayChartControl x:Name="IntradayChart"
+                                                                    SymbolName="未选择"
+                                                                    Visibility="Collapsed" />
+                                </Grid>
                             </Grid>
                         </Border>
                     </Grid>

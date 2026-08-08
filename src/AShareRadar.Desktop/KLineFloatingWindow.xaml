@@ -81,9 +81,15 @@
         </Border>
 
         <Border Grid.Row="1" Background="#040707" BorderBrush="#303437" BorderThickness="1" ClipToBounds="True">
-            <controls:KLineChartControl x:Name="KLineChart"
-                                        HorizontalAlignment="Stretch"
-                                        VerticalAlignment="Stretch" />
+            <Grid>
+                <controls:KLineChartControl x:Name="KLineChart"
+                                            HorizontalAlignment="Stretch"
+                                            VerticalAlignment="Stretch" />
+                <controls:IntradayChartControl x:Name="IntradayChart"
+                                                HorizontalAlignment="Stretch"
+                                                VerticalAlignment="Stretch"
+                                                Visibility="Collapsed" />
+            </Grid>
         </Border>
 
         <Border Grid.Row="2" Background="#090D10" BorderBrush="#1C252C" BorderThickness="0,1,0,0">

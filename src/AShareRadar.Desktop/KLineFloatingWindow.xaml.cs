@@ -36,19 +36,31 @@ public partial class KLineFloatingWindow : Window
         SymbolTitleText.Text = string.IsNullOrWhiteSpace(name) ? symbol : $"{symbol} {name}";
         KLineChart.SymbolName = SymbolTitleText.Text;
         KLineChart.TradeMarkers = BuildTradeMarkers(latestEvent);
+        IntradayChart.SymbolName = SymbolTitleText.Text;
+        IntradayChart.TradeMarkers = BuildTradeMarkers(latestEvent);
         await RefreshKLineAsync(cancellationToken);
     }
 
     private async Task SetPeriodAsync(string period)
     {
         _period = period;
+        if (IsIntradayPeriod(period))
+        {
+            _indicatorMode = "MACD";
+        }
         KLineChart.PeriodName = TranslateKLinePeriod(period);
+        ApplyChartMode();
         ApplyButtonStyles();
         await RunWindowActionAsync(RefreshKLineAsync);
     }
 
     private async Task SetIndicatorModeAsync(string mode)
     {
+        if (IsIntradayPeriod(_period) && mode != "MACD")
+        {
+            return;
+        }
+
         _indicatorMode = mode;
         KLineChart.IndicatorMode = mode;
         ApplyButtonStyles();
@@ -63,17 +75,23 @@ public partial class KLineFloatingWindow : Window
             KLineChart.Candles = [];
             KLineChart.IndicatorSeries = null;
             KLineChart.TradeMarkers = [];
+            IntradayChart.SymbolName = "未选择";
+            IntradayChart.Candles = [];
+            IntradayChart.IndicatorSeries = null;
+            IntradayChart.TradeMarkers = [];
             StatusText.Text = "未选择股票";
             return;
         }
 
         StatusText.Text = $"正在加载 {_symbol} {TranslateKLinePeriod(_period)}...";
         var count = GetKLineCount(_period);
-        var bars = await _apiClient.GetKLineAsync(_symbol, _period, count, cancellationToken);
-        KLineChart.SymbolName = string.IsNullOrWhiteSpace(_name) ? _symbol : $"{_symbol} {_name}";
-        KLineChart.PeriodName = TranslateKLinePeriod(_period);
-        KLineChart.TradeMarkers = BuildTradeMarkers(_latestEvent);
-        KLineChart.Candles = bars
+        var barsTask = _apiClient.GetKLineAsync(_symbol, _period, count, cancellationToken);
+        var dailyTask = IsIntradayPeriod(_period)
+            ? _apiClient.GetKLineAsync(_symbol, "day", 10, cancellationToken)
+            : Task.FromResult<IReadOnlyList<AShareRadar.Contracts.MarketData.KLineBarDto>>([]);
+        await Task.WhenAll(barsTask, dailyTask);
+        var bars = await barsTask;
+        var candles = bars
             .Select(item => new KLineCandle(
                 item.TradingTime,
                 item.Open,
@@ -84,6 +102,16 @@ public partial class KLineFloatingWindow : Window
                 item.Amount,
                 item.TurnoverRate))
             .ToArray();
+        KLineChart.SymbolName = string.IsNullOrWhiteSpace(_name) ? _symbol : $"{_symbol} {_name}";
+        KLineChart.PeriodName = TranslateKLinePeriod(_period);
+        KLineChart.TradeMarkers = BuildTradeMarkers(_latestEvent);
+        KLineChart.Candles = candles;
+        IntradayChart.SymbolName = KLineChart.SymbolName;
+        IntradayChart.IsFiveDay = _period == "five-day";
+        IntradayChart.TradeMarkers = KLineChart.TradeMarkers;
+        IntradayChart.Candles = candles;
+        IntradayChart.PreviousClose = ResolvePreviousClose(candles, await dailyTask);
+        ApplyChartMode();
         await RefreshIndicatorAsync(cancellationToken);
         CaptionText.Text = $"周期：{TranslateKLinePeriod(_period)}   副图：{_indicatorMode}";
         StatusText.Text = $"已加载 {bars.Count} 根K线";
@@ -118,10 +146,12 @@ public partial class KLineFloatingWindow : Window
                             item.Value3,
                             item.BarValue))
                         .ToArray());
+            IntradayChart.IndicatorSeries = KLineChart.IndicatorSeries;
         }
         catch
         {
             KLineChart.IndicatorSeries = null;
+            IntradayChart.IndicatorSeries = null;
         }
     }
 
@@ -159,6 +189,7 @@ public partial class KLineFloatingWindow : Window
         SetSelectionStyle(MacdIndicatorButton, _indicatorMode == "MACD", selectedStyle, normalStyle);
         SetSelectionStyle(KdjIndicatorButton, _indicatorMode == "KDJ", selectedStyle, normalStyle);
         SetSelectionStyle(RsiIndicatorButton, _indicatorMode == "RSI", selectedStyle, normalStyle);
+        ApplyChartMode();
     }
 
     private static void SetSelectionStyle(Button button, bool selected, Style selectedStyle, Style normalStyle)
@@ -226,6 +257,35 @@ public partial class KLineFloatingWindow : Window
             "month" => "月线",
             _ => "日线"
         };
+    }
+
+    private void ApplyChartMode()
+    {
+        var intraday = IsIntradayPeriod(_period);
+        IntradayChart.Visibility = intraday ? Visibility.Visible : Visibility.Collapsed;
+        KLineChart.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
+        KdjIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
+        RsiIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
+        MacdIndicatorButton.IsEnabled = !intraday;
+    }
+
+    private static bool IsIntradayPeriod(string period) => period is "minute" or "five-day";
+
+    private static decimal ResolvePreviousClose(
+        IReadOnlyList<KLineCandle> intradayBars,
+        IReadOnlyList<AShareRadar.Contracts.MarketData.KLineBarDto> dailyBars)
+    {
+        if (intradayBars.Count == 0)
+        {
+            return 0m;
+        }
+
+        var firstDate = intradayBars.Min(item => item.TradingTime.Date);
+        var previous = dailyBars
+            .Where(item => item.TradingTime.Date < firstDate)
+            .OrderBy(item => item.TradingTime)
+            .LastOrDefault();
+        return previous?.Close > 0 ? previous.Close : intradayBars[0].Open;
     }
 
     private static IReadOnlyList<KLineTradeMarker> BuildTradeMarkers(SignalEventDto? latestEvent)

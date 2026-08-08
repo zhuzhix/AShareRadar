@@ -1217,6 +1217,10 @@ public partial class MainWindow : Window
         KLineChart.Candles = [];
         KLineChart.IndicatorSeries = null;
         KLineChart.TradeMarkers = [];
+        IntradayChart.SymbolName = "未选择";
+        IntradayChart.Candles = [];
+        IntradayChart.IndicatorSeries = null;
+        IntradayChart.TradeMarkers = [];
     }
 
     private async void MinutePeriodButton_Click(object sender, RoutedEventArgs e)
@@ -2741,6 +2745,8 @@ public partial class MainWindow : Window
         SnapshotTimeText.Text = $"首次出现：{FormatTime(opportunity.FirstSeenTime)}\n最近出现：{FormatTime(opportunity.LastSeenTime)}";
         KLineChart.SymbolName = $"{opportunity.Symbol} {opportunity.Name}";
         KLineChart.TradeMarkers = BuildTradeMarkers(detail.LatestEvent);
+        IntradayChart.SymbolName = $"{opportunity.Symbol} {opportunity.Name}";
+        IntradayChart.TradeMarkers = BuildTradeMarkers(detail.LatestEvent);
         if (refreshKLine)
         {
             await RefreshKLineAsync(cancellationToken);
@@ -2781,6 +2787,10 @@ public partial class MainWindow : Window
         KLineChart.Candles = [];
         KLineChart.IndicatorSeries = null;
         KLineChart.TradeMarkers = [];
+        IntradayChart.SymbolName = "未选择";
+        IntradayChart.Candles = [];
+        IntradayChart.IndicatorSeries = null;
+        IntradayChart.TradeMarkers = [];
         ManualTagText.Text = "人工标记：--";
         DecisionNoteTextBox.Text = string.Empty;
         SnapshotReasonText.Text = "--";
@@ -2815,13 +2825,28 @@ public partial class MainWindow : Window
     private async Task SetKLinePeriodAsync(string period)
     {
         _kLinePeriod = period;
+        if (IsIntradayPeriod(period))
+        {
+            _indicatorMode = "MACD";
+        }
         KLineChart.PeriodName = TranslateKLinePeriod(period);
+        ApplyChartMode();
         ApplyKLineButtonStyles();
+        ChartCaptionText.Text = string.IsNullOrWhiteSpace(_selectedSymbol)
+            ? BuildChartPrompt(period)
+            : IsIntradayPeriod(period)
+                ? $"状态：已选择   周期：{TranslateKLinePeriod(period)}   价格 / 均价 / 成交量 / MACD"
+                : $"状态：已选择   周期：{TranslateKLinePeriod(period)}   副图：{_indicatorMode}";
         await RunUiActionAsync(async token => await RefreshKLineAsync(token));
     }
 
     private async Task SetIndicatorModeAsync(string mode)
     {
+        if (IsIntradayPeriod(_kLinePeriod) && mode != "MACD")
+        {
+            return;
+        }
+
         _indicatorMode = mode;
         KLineChart.IndicatorMode = mode;
         ApplyKLineButtonStyles();
@@ -2839,14 +2864,21 @@ public partial class MainWindow : Window
             KLineChart.Candles = [];
             KLineChart.IndicatorSeries = null;
             KLineChart.TradeMarkers = [];
+            IntradayChart.SymbolName = "未选择";
+            IntradayChart.Candles = [];
+            IntradayChart.IndicatorSeries = null;
+            IntradayChart.TradeMarkers = [];
             return;
         }
 
         var count = GetKLineCount(_kLinePeriod);
-        var bars = await _apiClient.GetKLineAsync(_selectedSymbol, _kLinePeriod, count, cancellationToken);
-        KLineChart.SymbolName = $"{_selectedSymbol} {_selectedName}";
-        KLineChart.PeriodName = TranslateKLinePeriod(_kLinePeriod);
-        KLineChart.Candles = bars
+        var barsTask = _apiClient.GetKLineAsync(_selectedSymbol, _kLinePeriod, count, cancellationToken);
+        var dailyTask = IsIntradayPeriod(_kLinePeriod)
+            ? _apiClient.GetKLineAsync(_selectedSymbol, "day", 10, cancellationToken)
+            : Task.FromResult<IReadOnlyList<AShareRadar.Contracts.MarketData.KLineBarDto>>([]);
+        await Task.WhenAll(barsTask, dailyTask);
+        var bars = await barsTask;
+        var candles = bars
             .Select(item => new KLineCandle(
                 item.TradingTime,
                 item.Open,
@@ -2857,6 +2889,14 @@ public partial class MainWindow : Window
                 item.Amount,
                 item.TurnoverRate))
             .ToArray();
+        KLineChart.SymbolName = $"{_selectedSymbol} {_selectedName}";
+        KLineChart.PeriodName = TranslateKLinePeriod(_kLinePeriod);
+        KLineChart.Candles = candles;
+        IntradayChart.SymbolName = $"{_selectedSymbol} {_selectedName}";
+        IntradayChart.IsFiveDay = _kLinePeriod == "five-day";
+        IntradayChart.Candles = candles;
+        IntradayChart.PreviousClose = ResolvePreviousClose(candles, await dailyTask);
+        ApplyChartMode();
         await RefreshIndicatorAsync(cancellationToken);
     }
 
@@ -2889,10 +2929,12 @@ public partial class MainWindow : Window
                             item.Value3,
                             item.BarValue))
                         .ToArray());
+            IntradayChart.IndicatorSeries = KLineChart.IndicatorSeries;
         }
         catch
         {
             KLineChart.IndicatorSeries = null;
+            IntradayChart.IndicatorSeries = null;
         }
     }
 
@@ -2940,7 +2982,7 @@ public partial class MainWindow : Window
     {
         return period switch
         {
-            "minute" => 96,
+            "minute" => 240,
             "five-day" => 240,
             "m1" => 240,
             "m5" => 240,
@@ -2994,6 +3036,39 @@ public partial class MainWindow : Window
             item.StrategySummary,
             $"首次命中 {FormatTime(item.FirstSeenTime)}   最近命中 {FormatTime(item.LastSeenTime)}",
             item.StrategyExplanation);
+    }
+
+    private void ApplyChartMode()
+    {
+        var intraday = IsIntradayPeriod(_kLinePeriod);
+        IntradayChart.Visibility = intraday ? Visibility.Visible : Visibility.Collapsed;
+        KLineChart.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
+        KdjIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
+        RsiIndicatorButton.Visibility = intraday ? Visibility.Collapsed : Visibility.Visible;
+        MacdIndicatorButton.IsEnabled = !intraday;
+    }
+
+    private static bool IsIntradayPeriod(string period) => period is "minute" or "five-day";
+
+    private static string BuildChartPrompt(string period) => IsIntradayPeriod(period)
+        ? "选择股票后显示分时价格、均价、成交量与 MACD。"
+        : "选择股票后显示对应个股走势、均线、成交量、指标副图与筹码分布。";
+
+    private static decimal ResolvePreviousClose(
+        IReadOnlyList<KLineCandle> intradayBars,
+        IReadOnlyList<AShareRadar.Contracts.MarketData.KLineBarDto> dailyBars)
+    {
+        if (intradayBars.Count == 0)
+        {
+            return 0m;
+        }
+
+        var firstDate = intradayBars.Min(item => item.TradingTime.Date);
+        var previous = dailyBars
+            .Where(item => item.TradingTime.Date < firstDate)
+            .OrderBy(item => item.TradingTime)
+            .LastOrDefault();
+        return previous?.Close > 0 ? previous.Close : intradayBars[0].Open;
     }
 
     private static bool IsRealtimePoolOpportunity(OpportunityDisplay item)
