@@ -1,43 +1,94 @@
-# AShareRadar Windows 安装包
+# AShareRadar Windows Install Package
 
-## 安装
+This package installs AShareRadar as a directory-style Windows application.
 
-在 PowerShell 中执行：
+## Layout
+
+```text
+AShareRadar-Setup/
+  install.ps1
+  uninstall.ps1
+  upgrade.ps1
+  doctor.ps1
+  start-ashare-radar.ps1
+  stop-ashare-radar.ps1
+  README.md
+  package-manifest.json
+  app/
+    service/
+    desktop/
+  data/
+    ashare.duckdb
+    runtime/
+    sector-mapping.csv
+    concept-mapping.csv
+    market-sentiment-external.csv
+    trading-calendar-cn.json
+  tools/
+    eastmoney_quant/
+    qlib_next_day/
+    python/requirements.txt
+  runtimes/
+    installers/
+```
+
+## Install
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-默认安装到：
+Default install directory:
 
 ```text
 %LOCALAPPDATA%\AShareRadar
 ```
 
-安装脚本会检查并安装：
+To install with an SDK token:
 
-- .NET 8 Desktop Runtime
-- .NET 8 ASP.NET Core Runtime
-- Python 3.12
-- 历史数据更新脚本所需 Python 包
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Token "<EASTMONEY_QUANT_TOKEN>"
+```
 
-## 启动
+Skip desktop shortcut creation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -NoShortcut
+```
+
+The installer rewrites `app\service\appsettings.json` so all data and script paths point to the install directory.
+
+## Start and Stop
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AShareRadar\start-ashare-radar.ps1"
-```
-
-## 停止
-
-```powershell
 powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AShareRadar\stop-ashare-radar.ps1"
 ```
 
-## 数据
+## Upgrade
 
-安装包内已包含：
+```powershell
+powershell -ExecutionPolicy Bypass -File .\upgrade.ps1
+```
 
-- SQLite 运行库数据：`app\service\data\runtime\ashare-radar.sqlite`
-- DuckDB 历史 K 线数据：`app\service\data\ashare.duckdb`
-- 行业/概念映射：`app\service\data\sector-mapping.csv`、`app\service\data\concept-mapping.csv`
-- 历史数据自动更新脚本：`app\service\tools\history_update`
+Upgrade replaces `app`, `tools`, and package scripts, then rewrites config. Existing `data\runtime` is preserved.
+
+## Doctor
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AShareRadar\doctor.ps1"
+```
+
+Doctor checks executables, data files, Python, token, tools, and the local service health endpoint.
+
+## Uninstall
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AShareRadar\uninstall.ps1"
+```
+
+Keep data while removing application files:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\AShareRadar\uninstall.ps1" -KeepData
+```

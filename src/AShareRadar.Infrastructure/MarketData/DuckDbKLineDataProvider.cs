@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Numerics;
 using AShareRadar.Application.MarketData;
 using DuckDB.NET.Data;
@@ -170,7 +171,7 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
         connection.Open();
 
         using var command = connection.CreateCommand();
-        command.CommandText = BuildSql(duckDbCode, period, count);
+        command.CommandText = BuildSql(duckDbCode, period, count, HasTable(connection, "daily_basic"));
 
         using var reader = command.ExecuteReader();
         var bars = new List<KLineBar>(count);
@@ -183,7 +184,9 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
                 ReadDecimal(reader, 2),
                 ReadDecimal(reader, 3),
                 ReadDecimal(reader, 4),
-                ReadDecimal(reader, 5)));
+                ReadDecimal(reader, 5),
+                ReadDecimal(reader, 6),
+                ReadNullableDecimal(reader, 7)));
         }
 
         bars.Reverse();
@@ -381,20 +384,25 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
             """;
     }
 
-    private static string BuildSql(string duckDbCode, string period, int count)
+    private static string BuildSql(string duckDbCode, string period, int count, bool hasDailyBasic)
     {
         var escapedCode = duckDbCode.Replace("'", "''", StringComparison.Ordinal);
         var safeCount = Math.Clamp(count, 1, 720);
 
         if (period == "week")
         {
+            var weeklyDailyBasicJoin = hasDailyBasic
+                ? "LEFT JOIN daily_basic b ON b.code = w.code AND b.date = w.date"
+                : "";
+            var weeklyTurnrateExpression = hasDailyBasic ? "b.turnrate" : "NULL";
             return $"""
-                SELECT date, open, high, low, close, volume
-                FROM weekly_bars
-                WHERE code = '{escapedCode}'
-                  AND adjustflag = '2'
-                  AND tradestatus = 1
-                ORDER BY date DESC
+                SELECT w.date, w.open, w.high, w.low, w.close, w.volume, w.amount, {weeklyTurnrateExpression} AS turnrate
+                FROM weekly_bars w
+                {weeklyDailyBasicJoin}
+                WHERE w.code = '{escapedCode}'
+                  AND w.adjustflag = '2'
+                  AND w.tradestatus = 1
+                ORDER BY w.date DESC
                 LIMIT {safeCount};
                 """;
         }
@@ -411,12 +419,11 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
                         low,
                         close,
                         volume,
+                        amount,
+                        {(hasDailyBasic ? "turnrate" : "NULL AS turnrate")},
                         row_number() OVER (PARTITION BY CAST(date_trunc('month', date) AS DATE) ORDER BY date ASC) AS open_rank,
                         row_number() OVER (PARTITION BY CAST(date_trunc('month', date) AS DATE) ORDER BY date DESC) AS close_rank
-                    FROM daily_bars
-                    WHERE code = '{escapedCode}'
-                      AND adjustflag = '2'
-                      AND tradestatus = 1
+                    FROM {DailySourceSql(escapedCode, hasDailyBasic)}
                 ),
                 grouped AS (
                     SELECT
@@ -425,24 +432,31 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
                         max(high) AS high,
                         min(low) AS low,
                         max(CASE WHEN close_rank = 1 THEN close END) AS close,
-                        sum(volume) AS volume
+                        sum(volume) AS volume,
+                        sum(amount) AS amount,
+                        sum(coalesce(turnrate, 0)) AS turnrate
                     FROM source
                     GROUP BY trading_time
                 )
-                SELECT trading_time, open, high, low, close, volume
+                SELECT trading_time, open, high, low, close, volume, amount, turnrate
                 FROM grouped
                 ORDER BY trading_time DESC
                 LIMIT {safeCount};
                 """;
         }
 
+        var dailyDailyBasicJoin = hasDailyBasic
+            ? "LEFT JOIN daily_basic b ON b.code = d.code AND b.date = d.date"
+            : "";
+        var dailyTurnrateExpression = hasDailyBasic ? "b.turnrate" : "NULL";
         return $"""
-            SELECT date, open, high, low, close, volume
-            FROM daily_bars
-            WHERE code = '{escapedCode}'
-              AND adjustflag = '2'
-              AND tradestatus = 1
-            ORDER BY date DESC
+            SELECT d.date, d.open, d.high, d.low, d.close, d.volume, d.amount, {dailyTurnrateExpression} AS turnrate
+            FROM daily_bars d
+            {dailyDailyBasicJoin}
+            WHERE d.code = '{escapedCode}'
+              AND d.adjustflag = '2'
+              AND d.tradestatus = 1
+            ORDER BY d.date DESC
             LIMIT {safeCount};
             """;
     }
@@ -551,6 +565,30 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
             """;
     }
 
+    private static string DailySourceSql(string escapedCode, bool hasDailyBasic)
+    {
+        if (!hasDailyBasic)
+        {
+            return $"""
+                daily_bars
+                    WHERE code = '{escapedCode}'
+                      AND adjustflag = '2'
+                      AND tradestatus = 1
+                """;
+        }
+
+        return $"""
+            (
+                SELECT d.*, b.turnrate
+                FROM daily_bars d
+                LEFT JOIN daily_basic b ON b.code = d.code AND b.date = d.date
+                WHERE d.code = '{escapedCode}'
+                  AND d.adjustflag = '2'
+                  AND d.tradestatus = 1
+            )
+            """;
+    }
+
     private static string ToDuckDbCode(string symbol)
     {
         var code = StockSymbolNormalizer.NormalizeCode(symbol);
@@ -600,6 +638,20 @@ public sealed class DuckDbKLineDataProvider : IBatchKLineDataProvider, IHistoric
             BigInteger integerValue => (decimal)integerValue,
             _ => Convert.ToDecimal(value)
         };
+    }
+
+    private static decimal? ReadNullableDecimal(IDataRecord reader, int ordinal)
+    {
+        return reader.IsDBNull(ordinal) ? null : ReadDecimal(reader, ordinal);
+    }
+
+    private static bool HasTable(DuckDBConnection connection, string tableName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM information_schema.tables WHERE table_name = ?";
+        command.Parameters.Add(new DuckDBParameter { Value = tableName });
+        var value = command.ExecuteScalar();
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture) > 0;
     }
 
     private static void LogFallback(Exception exception)

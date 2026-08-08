@@ -20,7 +20,8 @@ public sealed class QlibNextDayPredictionRunner
     public async Task<QlibNextDayPredictionRunResult> RunAsync(
         DateOnly signalDate,
         IReadOnlyList<string> symbols,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, bool>? lineSink = null)
     {
         if (!_options.Enabled)
         {
@@ -54,7 +55,7 @@ public sealed class QlibNextDayPredictionRunner
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 cancellationToken);
 
-            await RunProcessAsync(signalDate, symbolsPath, cancellationToken);
+            await RunProcessAsync(signalDate, symbolsPath, cancellationToken, lineSink);
             var outputDirectory = FindOutputDirectory(signalDate, beforeRun);
             var csvPath = Path.Combine(outputDirectory, "tomorrow_predictions.csv");
             var predictions = _csvReader.Read(csvPath, signalDate);
@@ -66,7 +67,11 @@ public sealed class QlibNextDayPredictionRunner
         }
     }
 
-    private async Task RunProcessAsync(DateOnly signalDate, string symbolsPath, CancellationToken cancellationToken)
+    private async Task RunProcessAsync(
+        DateOnly signalDate,
+        string symbolsPath,
+        CancellationToken cancellationToken,
+        Action<string, bool>? lineSink)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(Math.Max(1, _options.TimeoutMinutes)));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
@@ -102,6 +107,7 @@ public sealed class QlibNextDayPredictionRunner
             if (args.Data is not null)
             {
                 output.AppendLine(args.Data);
+                lineSink?.Invoke(args.Data, false);
             }
         };
         process.ErrorDataReceived += (_, args) =>
@@ -109,6 +115,7 @@ public sealed class QlibNextDayPredictionRunner
             if (args.Data is not null)
             {
                 error.AppendLine(args.Data);
+                lineSink?.Invoke(args.Data, true);
             }
         };
 

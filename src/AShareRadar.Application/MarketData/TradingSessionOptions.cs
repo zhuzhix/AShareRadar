@@ -10,7 +10,7 @@ public sealed class TradingSessionOptions
 
     public string CallAuctionStartTime { get; set; } = "09:15";
 
-    public string MorningStartTime { get; set; } = "09:30";
+    public string MorningStartTime { get; set; } = "09:25";
 
     public string MorningEndTime { get; set; } = "11:30";
 

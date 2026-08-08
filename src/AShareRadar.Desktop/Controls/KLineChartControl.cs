@@ -45,15 +45,21 @@ public sealed class KLineChartControl : FrameworkElement
         typeof(KLineChartControl),
         new FrameworkPropertyMetadata(Array.Empty<KLineTradeMarker>(), FrameworkPropertyMetadataOptions.AffectsRender));
 
-    private static readonly Brush BackgroundBrush = new SolidColorBrush(Color.FromRgb(11, 15, 20));
-    private static readonly Brush GridBrush = new SolidColorBrush(Color.FromRgb(38, 44, 52));
-    private static readonly Brush TextBrush = new SolidColorBrush(Color.FromRgb(154, 164, 176));
-    private static readonly Brush RisingBrush = new SolidColorBrush(Color.FromRgb(255, 69, 58));
-    private static readonly Brush FallingBrush = new SolidColorBrush(Color.FromRgb(0, 199, 190));
-    private static readonly Brush Ma5Brush = new SolidColorBrush(Color.FromRgb(210, 203, 0));
-    private static readonly Brush Ma10Brush = new SolidColorBrush(Color.FromRgb(244, 0, 222));
-    private static readonly Brush Ma20Brush = new SolidColorBrush(Color.FromRgb(0, 178, 52));
-    private static readonly Brush Ma60Brush = new SolidColorBrush(Color.FromRgb(150, 150, 150));
+    private static readonly Brush BackgroundBrush = new SolidColorBrush(Color.FromRgb(4, 7, 7));
+    private static readonly Brush PanelBrush = new SolidColorBrush(Color.FromRgb(7, 9, 10));
+    private static readonly Brush GridBrush = new SolidColorBrush(Color.FromRgb(30, 34, 36));
+    private static readonly Brush StrongGridBrush = new SolidColorBrush(Color.FromRgb(48, 52, 55));
+    private static readonly Brush TextBrush = new SolidColorBrush(Color.FromRgb(130, 139, 145));
+    private static readonly Brush MutedTextBrush = new SolidColorBrush(Color.FromRgb(84, 93, 98));
+    private static readonly Brush RisingBrush = new SolidColorBrush(Color.FromRgb(222, 52, 47));
+    private static readonly Brush FallingBrush = new SolidColorBrush(Color.FromRgb(0, 214, 214));
+    private static readonly Brush Ma5Brush = new SolidColorBrush(Color.FromRgb(223, 223, 30));
+    private static readonly Brush Ma10Brush = new SolidColorBrush(Color.FromRgb(255, 150, 24));
+    private static readonly Brush Ma20Brush = new SolidColorBrush(Color.FromRgb(218, 49, 224));
+    private static readonly Brush Ma30Brush = new SolidColorBrush(Color.FromRgb(0, 197, 55));
+    private static readonly Brush Ma60Brush = new SolidColorBrush(Color.FromRgb(139, 145, 150));
+    private static readonly Brush Ma120Brush = new SolidColorBrush(Color.FromRgb(0, 173, 190));
+    private static readonly Brush Ma250Brush = new SolidColorBrush(Color.FromRgb(203, 198, 86));
     private static readonly Brush ChipYellowBrush = new SolidColorBrush(Color.FromRgb(255, 196, 0));
     private static readonly Brush ChipOrangeBrush = new SolidColorBrush(Color.FromRgb(255, 122, 0));
     private static readonly Brush ChipPinkBrush = new SolidColorBrush(Color.FromRgb(255, 24, 142));
@@ -63,8 +69,8 @@ public sealed class KLineChartControl : FrameworkElement
     private static readonly Brush BuyMarkerBrush = new SolidColorBrush(Color.FromRgb(52, 199, 89));
     private static readonly Brush SellMarkerBrush = new SolidColorBrush(Color.FromRgb(255, 149, 0));
     private static readonly Brush StopMarkerBrush = new SolidColorBrush(Color.FromRgb(255, 69, 58));
-    private const double ChartLeft = 8d;
-    private const double HeaderHeight = 54d;
+    private const double ChartLeft = 2d;
+    private const double HeaderHeight = 30d;
     private const double ChipPanelWidth = 190d;
     private const double ChartRightGap = 58d;
     private const double ChipPanelGap = 46d;
@@ -163,8 +169,12 @@ public sealed class KLineChartControl : FrameworkElement
         DrawMovingAverage(dc, candles, chartRect, 5, Ma5Brush);
         DrawMovingAverage(dc, candles, chartRect, 10, Ma10Brush);
         DrawMovingAverage(dc, candles, chartRect, 20, Ma20Brush);
+        DrawMovingAverage(dc, candles, chartRect, 30, Ma30Brush);
         DrawMovingAverage(dc, candles, chartRect, 60, Ma60Brush);
+        DrawMovingAverage(dc, candles, chartRect, 120, Ma120Brush);
+        DrawMovingAverage(dc, candles, chartRect, 250, Ma250Brush);
         DrawTradeMarkers(dc, candles, chartRect);
+        DrawHighLowMarkers(dc, candles, chartRect);
         DrawVolume(dc, candles, volumeRect);
         DrawIndicatorPanel(dc, candles, macdRect);
         DrawChipDistribution(dc, chipCandles, chipRect, priceRange);
@@ -242,10 +252,10 @@ public sealed class KLineChartControl : FrameworkElement
     private static (Rect ChartRect, Rect VolumeRect, Rect MacdRect, Rect ChipRect) CreateLayout(double width, double height)
     {
         var chartWidth = Math.Max(80, width - ChipPanelWidth - ChartRightGap);
-        var chartHeight = Math.Max(72, height * 0.62 - 48);
+        var chartHeight = Math.Max(72, height * 0.64 - 36);
         var chartRect = new Rect(ChartLeft, HeaderHeight, chartWidth, chartHeight);
-        var volumeRect = new Rect(ChartLeft, chartRect.Bottom + 8, chartRect.Width, Math.Max(42, height * 0.18));
-        var macdRect = new Rect(ChartLeft, volumeRect.Bottom + 8, chartRect.Width, Math.Max(48, height - volumeRect.Bottom - 14));
+        var volumeRect = new Rect(ChartLeft, chartRect.Bottom, chartRect.Width, Math.Max(50, height * 0.18));
+        var macdRect = new Rect(ChartLeft, volumeRect.Bottom, chartRect.Width, Math.Max(52, height - volumeRect.Bottom - 2));
         var chipRect = new Rect(chartRect.Right + ChipPanelGap, chartRect.Top, ChipPanelWidth, chartRect.Height);
         return (chartRect, volumeRect, macdRect, chipRect);
     }
@@ -263,15 +273,28 @@ public sealed class KLineChartControl : FrameworkElement
     private void DrawHeader(DrawingContext dc, IReadOnlyList<KLineCandle> candles)
     {
         var latest = candles[^1];
-        DrawText(dc, $"{SymbolName}（{PeriodName}）", 8, 7, 12, ChipYellowBrush);
-        DrawText(dc, $"最新:{latest.Close:F2}  显示:{candles.Count}根  偏移:{_rightOffset}", Math.Max(8, ActualWidth - 242), 7, 12, latest.Close >= latest.Open ? RisingBrush : FallingBrush);
-        DrawText(dc, $"MA5:{Average(candles, 5):F2}   MA10:{Average(candles, 10):F2}   MA20:{Average(candles, 20):F2}   MA60:{Average(candles, 60):F2}", 8, 29, 12, TextBrush);
+        dc.DrawRectangle(PanelBrush, null, new Rect(0, 0, ActualWidth, HeaderHeight));
+        dc.DrawLine(new Pen(StrongGridBrush, 1), new Point(0, HeaderHeight - 1), new Point(ActualWidth, HeaderHeight - 1));
+
+        var x = 6d;
+        DrawInlineText(dc, ref x, $"{SymbolName}  {PeriodName}  前复权  ", 12, ChipYellowBrush, 7);
+        DrawInlineText(dc, ref x, "MA  ", 12, TextBrush, 7);
+        DrawInlineText(dc, ref x, $"MA5:{Average(candles, 5):F2}↓  ", 12, Ma5Brush, 7);
+        DrawInlineText(dc, ref x, $"MA10:{Average(candles, 10):F2}↓  ", 12, Ma10Brush, 7);
+        DrawInlineText(dc, ref x, $"MA20:{Average(candles, 20):F2}↓  ", 12, Ma20Brush, 7);
+        DrawInlineText(dc, ref x, $"MA30:{Average(candles, 30):F2}↓  ", 12, Ma30Brush, 7);
+        DrawInlineText(dc, ref x, $"MA60:{Average(candles, 60):F2}↓  ", 12, Ma60Brush, 7);
+        DrawInlineText(dc, ref x, $"MA120:{Average(candles, 120):F2}↓  ", 12, Ma120Brush, 7);
+        DrawInlineText(dc, ref x, $"MA250:{Average(candles, 250):F2}↓", 12, Ma250Brush, 7);
+
+        var changeBrush = latest.Close >= latest.Open ? RisingBrush : FallingBrush;
+        DrawText(dc, $"最新 {latest.Close:F2}", Math.Max(8, ActualWidth - 102), 7, 12, changeBrush);
     }
 
     private static void DrawGrid(DrawingContext dc, Rect rect, int rows, int columns)
     {
         var pen = new Pen(GridBrush, 1);
-        dc.DrawRectangle(null, pen, rect);
+        dc.DrawRectangle(null, new Pen(StrongGridBrush, 1), rect);
 
         for (var i = 1; i < rows; i++)
         {
@@ -400,22 +423,100 @@ public sealed class KLineChartControl : FrameworkElement
         }
     }
 
+    private static void DrawHighLowMarkers(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
+    {
+        if (candles.Count == 0)
+        {
+            return;
+        }
+
+        var highIndex = 0;
+        var lowIndex = 0;
+        for (var i = 1; i < candles.Count; i++)
+        {
+            if (candles[i].High > candles[highIndex].High)
+            {
+                highIndex = i;
+            }
+
+            if (candles[i].Low < candles[lowIndex].Low)
+            {
+                lowIndex = i;
+            }
+        }
+
+        var (minPrice, maxPrice) = GetPriceRange(candles);
+        var step = rect.Width / candles.Count;
+        DrawPriceCallout(dc, rect, highIndex, candles[highIndex].High, minPrice, maxPrice, step, true);
+        DrawPriceCallout(dc, rect, lowIndex, candles[lowIndex].Low, minPrice, maxPrice, step, false);
+    }
+
+    private static void DrawPriceCallout(
+        DrawingContext dc,
+        Rect rect,
+        int index,
+        decimal price,
+        decimal minPrice,
+        decimal maxPrice,
+        double step,
+        bool high)
+    {
+        var x = rect.Left + step * index + step / 2;
+        var y = MapY(price, minPrice, maxPrice, rect);
+        var label = high ? $"←{price:F2}" : $"←{price:F2}";
+        var leftSide = x > rect.Left + rect.Width * 0.66;
+        var tickEnd = leftSide ? x - 26 : x + 26;
+        var labelX = leftSide ? x - 68 : x + 8;
+        var labelY = Math.Clamp(y + (high ? -20 : 4), rect.Top + 2, rect.Bottom - 16);
+        var pen = new Pen(Brushes.White, 1);
+
+        dc.DrawLine(pen, new Point(x, y), new Point(tickEnd, y));
+        DrawText(dc, leftSide ? $"{price:F2}→" : label, labelX, labelY, 11, Brushes.White);
+    }
+
     private static void DrawVolume(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
     {
         var maxVolume = Math.Max(1, candles.Max(item => item.Volume));
         var step = rect.Width / candles.Count;
         var barWidth = Math.Clamp(step * 0.58, 3, 10);
 
-        DrawText(dc, $"VOL  VOLUME:{candles[^1].Volume / 10000m:F2}万", rect.Left, rect.Top + 4, 12, TextBrush);
+        var headerX = rect.Left + 2;
+        DrawInlineText(dc, ref headerX, $"VOL(5,10) VOLUME:{candles[^1].Volume / 10000m:F2}万  ", 12, TextBrush, rect.Top + 4);
+        DrawInlineText(dc, ref headerX, $"MAVOL1:{AverageVolume(candles, 5) / 10000m:F2}万↓  ", 12, Ma5Brush, rect.Top + 4);
+        DrawInlineText(dc, ref headerX, $"MAVOL2:{AverageVolume(candles, 10) / 10000m:F2}万↑", 12, Ma20Brush, rect.Top + 4);
 
         for (var i = 0; i < candles.Count; i++)
         {
             var item = candles[i];
-            var x = rect.Left + step * i + step / 2;
+            var barX = rect.Left + step * i + step / 2;
             var barHeight = (double)(item.Volume / maxVolume) * (rect.Height - 22);
             var brush = item.Close >= item.Open ? RisingBrush : FallingBrush;
-            dc.DrawRectangle(brush, null, new Rect(x - barWidth / 2, rect.Bottom - barHeight, barWidth, barHeight));
+            dc.DrawRectangle(brush, null, new Rect(barX - barWidth / 2, rect.Bottom - barHeight, barWidth, barHeight));
         }
+
+        DrawVolumeAverage(dc, candles, rect, 5, Ma5Brush);
+        DrawVolumeAverage(dc, candles, rect, 10, Ma20Brush);
+    }
+
+    private static void DrawVolumeAverage(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect, int window, Brush brush)
+    {
+        if (candles.Count < window)
+        {
+            return;
+        }
+
+        var maxVolume = Math.Max(1, candles.Max(item => item.Volume));
+        var step = rect.Width / candles.Count;
+        var points = new PointCollection();
+        for (var i = window - 1; i < candles.Count; i++)
+        {
+            var avg = candles.Skip(i - window + 1).Take(window).Average(item => item.Volume);
+            var x = rect.Left + step * i + step / 2;
+            var y = rect.Bottom - (double)(avg / maxVolume) * (rect.Height - 22);
+            points.Add(new Point(x, y));
+        }
+
+        DrawPolyline(dc, points, brush);
     }
 
     private void DrawIndicatorPanel(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
@@ -523,7 +624,7 @@ public sealed class KLineChartControl : FrameworkElement
             if (point.BarValue is { } bar)
             {
                 var barY = MapRangeY(bar, min, max, rect);
-                var brush = bar >= 0 ? FallingBrush : RisingBrush;
+                var brush = bar >= 0 ? RisingBrush : FallingBrush;
                 dc.DrawLine(new Pen(brush, 1), new Point(x, zeroY), new Point(x, barY));
             }
 
@@ -593,27 +694,37 @@ public sealed class KLineChartControl : FrameworkElement
 
     private static void DrawMacdLikePanel(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
     {
-        DrawText(dc, "MACD(12,26,9)  DIF:-1.19  DEA:-1.15  MACD:-0.07", rect.Left, rect.Top + 4, 12, TextBrush);
-        var mid = rect.Top + rect.Height * 0.55;
-        var zeroPen = new Pen(GridBrush, 1);
-        dc.DrawLine(zeroPen, new Point(rect.Left, mid), new Point(rect.Right, mid));
+        DrawMacdIndicatorPanel(dc, CalculateMacdPoints(candles), rect);
+    }
 
-        var step = rect.Width / candles.Count;
-        var dif = new PointCollection();
-        var dea = new PointCollection();
-        for (var i = 0; i < candles.Count; i++)
+    private static IReadOnlyList<KLineIndicatorPoint> CalculateMacdPoints(IReadOnlyList<KLineCandle> candles)
+    {
+        if (candles.Count == 0)
         {
-            var x = rect.Left + step * i + step / 2;
-            var wave = Math.Sin(i / 6.0) * 18 + Math.Cos(i / 11.0) * 10;
-            var signal = Math.Sin((i + 5) / 7.0) * 14;
-            var barBrush = wave >= 0 ? FallingBrush : RisingBrush;
-            dc.DrawLine(new Pen(barBrush, 1), new Point(x, mid), new Point(x, mid - wave * 0.65));
-            dif.Add(new Point(x, mid - wave));
-            dea.Add(new Point(x, mid - signal));
+            return [];
         }
 
-        DrawPolyline(dc, dif, Ma60Brush);
-        DrawPolyline(dc, dea, Ma5Brush);
+        var result = new List<KLineIndicatorPoint>(candles.Count);
+        var ema12 = candles[0].Close;
+        var ema26 = candles[0].Close;
+        var dea = 0m;
+
+        foreach (var candle in candles)
+        {
+            ema12 = Ema(candle.Close, ema12, 12);
+            ema26 = Ema(candle.Close, ema26, 26);
+            var dif = ema12 - ema26;
+            dea = Ema(dif, dea, 9);
+            var macd = (dif - dea) * 2m;
+            result.Add(new KLineIndicatorPoint(candle.TradingTime, dif, dea, null, macd));
+        }
+
+        return result;
+    }
+
+    private static decimal Ema(decimal value, decimal previous, int period)
+    {
+        return previous + (value - previous) * 2m / (period + 1);
     }
 
     private static void DrawKdjPanel(DrawingContext dc, IReadOnlyList<KLineCandle> candles, Rect rect)
@@ -721,7 +832,8 @@ public sealed class KLineChartControl : FrameworkElement
             return;
         }
 
-        var distribution = BuildChipDistribution(candles, 72, priceRange.Min, priceRange.Max);
+        var distributionResult = BuildMovingChipDistribution(candles, 96, priceRange.Min, priceRange.Max);
+        var distribution = distributionResult.Buckets;
         var maxVolume = distribution.Max(item => item.Volume);
         if (maxVolume <= 0)
         {
@@ -729,19 +841,10 @@ public sealed class KLineChartControl : FrameworkElement
         }
 
         var latestClose = candles[^1].Close;
-        var totalVolume = distribution.Sum(item => item.Volume);
-        var profitVolume = distribution
-            .Where(item => item.Price <= latestClose)
-            .Sum(item => item.Volume);
-        var profitRatio = totalVolume == 0 ? 0 : profitVolume / totalVolume * 100;
-        var averageCost = totalVolume == 0
-            ? latestClose
-            : distribution.Sum(item => item.Price * item.Volume) / totalVolume;
-        var peak = distribution.OrderByDescending(item => item.Volume).First();
-        var costRange = CalculateCostRange(distribution, totalVolume, 0.90m);
         const double labelWidth = 46d;
-        var headerRect = new Rect(rect.Left + 5, rect.Top + 5, rect.Width - 10, 62);
-        var footerRect = new Rect(rect.Left + 5, rect.Bottom - 45, rect.Width - 10, 40);
+        var footerHeight = Math.Min(152d, Math.Max(124d, rect.Height * 0.38d));
+        var headerRect = new Rect(rect.Left + 5, rect.Top + 5, rect.Width - 10, 44);
+        var footerRect = new Rect(rect.Left + 5, rect.Bottom - footerHeight - 5, rect.Width - 10, footerHeight);
         var distributionRect = new Rect(
             rect.Left,
             headerRect.Bottom + 8,
@@ -759,15 +862,19 @@ public sealed class KLineChartControl : FrameworkElement
             var width = (double)(item.Volume / maxVolume) * maxWidth;
             var brush = item.Price <= latestClose
                 ? ChipYellowBrush
-                : item.Price <= averageCost
+                : item.Price <= distributionResult.AverageCost
                     ? ChipOrangeBrush
                     : ChipPinkBrush;
             dc.DrawRectangle(brush, null, new Rect(barLeft, y, width, h));
         }
 
-        var peakY = MapChipY(peak.Price, priceRange.Min, priceRange.Max, distributionRect);
-        var averageY = MapChipY(averageCost, priceRange.Min, priceRange.Max, distributionRect);
+        DrawChipOutline(dc, distribution, maxVolume, barLeft, barRight, distributionRect);
+
+        var currentY = MapChipY(latestClose, priceRange.Min, priceRange.Max, distributionRect);
+        var peakY = MapChipY(distributionResult.PeakPrice, priceRange.Min, priceRange.Max, distributionRect);
+        var averageY = MapChipY(distributionResult.AverageCost, priceRange.Min, priceRange.Max, distributionRect);
         dc.DrawLine(new Pen(Brushes.White, 1), new Point(barLeft, peakY), new Point(barRight, peakY));
+        dc.DrawLine(new Pen(RisingBrush, 1) { DashStyle = DashStyles.Dash }, new Point(barLeft, currentY), new Point(barRight, currentY));
         dc.DrawLine(new Pen(Ma60Brush, 1) { DashStyle = DashStyles.Dash }, new Point(barLeft, averageY), new Point(barRight, averageY));
 
         DrawChipPriceLabels(dc, distributionRect, labelWidth, priceRange.Min, priceRange.Max, headerRect, footerRect);
@@ -775,19 +882,25 @@ public sealed class KLineChartControl : FrameworkElement
         dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(225, 15, 19, 26)), new Pen(TooltipBorderBrush, 1), headerRect);
         dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(210, 15, 19, 26)), null, footerRect);
         DrawText(dc, "筹码分布", headerRect.Left + 7, headerRect.Top + 5, 11, Brushes.White);
-        DrawText(dc, $"主峰 {peak.Price:F2}", headerRect.Left + 7, headerRect.Top + 22, 10, ChipPinkBrush);
-        DrawText(dc, $"均价 {averageCost:F2}", headerRect.Left + 7, headerRect.Top + 39, 10, TextBrush);
-        DrawText(dc, $"获利 {profitRatio:F1}%", headerRect.Left + 92, headerRect.Top + 39, 10, ChipYellowBrush);
-        DrawText(dc, "黄=获利  粉=套牢", footerRect.Left + 7, footerRect.Top + 5, 10, TextBrush);
-        DrawText(dc, $"90%成本 {costRange.Low:F2}-{costRange.High:F2}", footerRect.Left + 7, footerRect.Top + 23, 10, TextBrush);
+        DrawText(dc, $"主峰 {distributionResult.PeakPrice:F2}", headerRect.Left + 7, headerRect.Top + 22, 10, ChipPinkBrush);
+        DrawText(dc, $"获利 {distributionResult.WinnerRate:F1}%", headerRect.Left + 92, headerRect.Top + 22, 10, ChipYellowBrush);
+        DrawChipStats(dc, footerRect, distributionResult, candles[^1].TradingTime);
     }
 
-    private static IReadOnlyList<ChipBucket> BuildChipDistribution(IReadOnlyList<KLineCandle> candles, int bucketCount, decimal minPrice, decimal maxPrice)
+    private static ChipDistributionResult BuildMovingChipDistribution(
+        IReadOnlyList<KLineCandle> candles,
+        int bucketCount,
+        decimal minPrice,
+        decimal maxPrice)
     {
         if (maxPrice <= minPrice)
         {
             maxPrice = minPrice + 0.01m;
         }
+
+        var padding = (maxPrice - minPrice) * 0.05m;
+        minPrice = Math.Max(0.01m, minPrice - padding);
+        maxPrice += padding;
 
         var step = (maxPrice - minPrice) / bucketCount;
 
@@ -796,23 +909,266 @@ public sealed class KLineChartControl : FrameworkElement
                 minPrice + step * (index + 0.5m),
                 0m))
             .ToArray();
-
-        foreach (var candle in candles)
+        var periodContributions = new Dictionary<int, decimal[]>
         {
-            var low = Math.Min(candle.Low, candle.High);
-            var high = Math.Max(candle.Low, candle.High);
-            var first = Math.Clamp((int)Math.Floor((low - minPrice) / step), 0, bucketCount - 1);
-            var last = Math.Clamp((int)Math.Floor((high - minPrice) / step), 0, bucketCount - 1);
-            var touched = Math.Max(1, last - first + 1);
-            var volumeShare = candle.Volume / touched;
+            [5] = new decimal[bucketCount],
+            [10] = new decimal[bucketCount],
+            [20] = new decimal[bucketCount],
+            [30] = new decimal[bucketCount],
+            [60] = new decimal[bucketCount],
+            [100] = new decimal[bucketCount]
+        };
 
-            for (var i = first; i <= last; i++)
+        for (var candleIndex = 0; candleIndex < candles.Count; candleIndex++)
+        {
+            var candle = candles[candleIndex];
+            var turnover = EstimateTurnover(candles, candleIndex);
+
+            for (var i = 0; i < buckets.Length; i++)
             {
-                buckets[i] = buckets[i] with { Volume = buckets[i].Volume + volumeShare };
+                buckets[i] = buckets[i] with { Volume = buckets[i].Volume * (1m - turnover) };
+            }
+
+            foreach (var contribution in periodContributions.Values)
+            {
+                for (var i = 0; i < contribution.Length; i++)
+                {
+                    contribution[i] *= 1m - turnover;
+                }
+            }
+
+            var todayDistribution = BuildTriangleDistribution(candle, buckets, minPrice, step);
+            for (var i = 0; i < buckets.Length; i++)
+            {
+                var added = todayDistribution[i] * turnover;
+                buckets[i] = buckets[i] with { Volume = buckets[i].Volume + added };
+                foreach (var (period, contribution) in periodContributions)
+                {
+                    if (candles.Count - candleIndex <= period)
+                    {
+                        contribution[i] += added;
+                    }
+                }
+            }
+
+        }
+
+        var rawTotalVolume = buckets.Sum(item => item.Volume);
+        var periodShares = periodContributions.ToDictionary(
+            item => item.Key,
+            item => rawTotalVolume <= 0m ? 0m : item.Value.Sum() / rawTotalVolume * 100m);
+        NormalizeChipBuckets(buckets);
+
+        var totalVolume = buckets.Sum(item => item.Volume);
+        var latestClose = candles[^1].Close;
+        var winnerRate = totalVolume <= 0m
+            ? 0m
+            : buckets.Where(item => item.Price <= latestClose).Sum(item => item.Volume) / totalVolume * 100m;
+        var averageCost = totalVolume <= 0m
+            ? latestClose
+            : buckets.Sum(item => item.Price * item.Volume) / totalVolume;
+        var peakPrice = buckets.OrderByDescending(item => item.Volume).FirstOrDefault()?.Price ?? latestClose;
+
+        return new ChipDistributionResult(
+            buckets,
+            winnerRate,
+            averageCost,
+            peakPrice,
+            CalculateCostPercentile(buckets, totalVolume, 0.05m),
+            CalculateCostPercentile(buckets, totalVolume, 0.15m),
+            CalculateCostPercentile(buckets, totalVolume, 0.50m),
+            CalculateCostPercentile(buckets, totalVolume, 0.85m),
+            CalculateCostPercentile(buckets, totalVolume, 0.95m),
+            periodShares);
+    }
+
+    private static decimal[] BuildTriangleDistribution(
+        KLineCandle candle,
+        IReadOnlyList<ChipBucket> buckets,
+        decimal minPrice,
+        decimal step)
+    {
+        var distribution = new decimal[buckets.Count];
+        var low = Math.Min(candle.Low, candle.High);
+        var high = Math.Max(candle.Low, candle.High);
+        var avgPrice = ResolveTypicalPrice(candle);
+        var first = Math.Clamp((int)Math.Floor((low - minPrice) / step), 0, buckets.Count - 1);
+        var last = Math.Clamp((int)Math.Floor((high - minPrice) / step), 0, buckets.Count - 1);
+
+        if (high <= low || avgPrice <= low || avgPrice >= high)
+        {
+            var centerPrice = high <= low ? candle.Close : Math.Clamp(avgPrice, low, high);
+            var center = Math.Clamp((int)Math.Floor((centerPrice - minPrice) / step), 0, buckets.Count - 1);
+            distribution[center] = 1m;
+            return distribution;
+        }
+
+        for (var i = first; i <= last; i++)
+        {
+            var price = buckets[i].Price;
+            var weight = price <= avgPrice
+                ? (price - low) / (avgPrice - low)
+                : (high - price) / (high - avgPrice);
+            distribution[i] = Math.Max(0m, weight);
+        }
+
+        if (distribution.Sum() <= 0m)
+        {
+            var center = Math.Clamp((int)Math.Floor((candle.Close - minPrice) / step), 0, buckets.Count - 1);
+            distribution[center] = 1m;
+        }
+
+        NormalizeDistribution(distribution);
+        return distribution;
+    }
+
+    private static decimal EstimateTurnover(IReadOnlyList<KLineCandle> candles, int candleIndex)
+    {
+        var candle = candles[candleIndex];
+        if (candle.TurnoverRate is > 0m and var turnrate)
+        {
+            return Math.Clamp(turnrate / 100m, 0.003m, 0.18m);
+        }
+
+        var start = Math.Max(0, candleIndex - 19);
+        var averageVolume = candles
+            .Skip(start)
+            .Take(candleIndex - start + 1)
+            .Where(item => item.Volume > 0m)
+            .Select(item => item.Volume)
+            .DefaultIfEmpty(candle.Volume > 0m ? candle.Volume : 1m)
+            .Average();
+        var relativeVolume = averageVolume <= 0m ? 1m : candle.Volume / averageVolume;
+        var baseTurnover = ResolveBaseTurnover(candles);
+        return Math.Clamp(relativeVolume * baseTurnover, 0.003m, 0.18m);
+    }
+
+    private static decimal ResolveBaseTurnover(IReadOnlyList<KLineCandle> candles)
+    {
+        if (!IsIntradayCandles(candles))
+        {
+            return 0.035m;
+        }
+
+        var intervals = candles
+            .Zip(candles.Skip(1), (left, right) => (right.TradingTime - left.TradingTime).TotalMinutes)
+            .Where(item => item > 0 && item < 240)
+            .ToArray();
+        var medianMinutes = intervals.Length == 0
+            ? 30d
+            : intervals.OrderBy(item => item).ElementAt(intervals.Length / 2);
+        return medianMinutes >= 30d ? 0.012m : 0.004m;
+    }
+
+    private static decimal ResolveTypicalPrice(KLineCandle candle)
+    {
+        if (candle.Amount > 0m && candle.Volume > 0m)
+        {
+            var averagePrice = candle.Amount / candle.Volume;
+            if (averagePrice >= candle.Low * 0.95m && averagePrice <= candle.High * 1.05m)
+            {
+                return averagePrice;
             }
         }
 
-        return buckets;
+        return (candle.High + candle.Low + candle.Close) / 3m;
+    }
+
+    private static void NormalizeChipBuckets(ChipBucket[] buckets)
+    {
+        var total = buckets.Sum(item => item.Volume);
+        if (total <= 0m)
+        {
+            return;
+        }
+
+        for (var i = 0; i < buckets.Length; i++)
+        {
+            buckets[i] = buckets[i] with { Volume = buckets[i].Volume / total };
+        }
+    }
+
+    private static void NormalizeDistribution(decimal[] values)
+    {
+        var total = values.Sum();
+        if (total <= 0m)
+        {
+            return;
+        }
+
+        for (var i = 0; i < values.Length; i++)
+        {
+            values[i] /= total;
+        }
+    }
+
+    private static decimal CalculateCostPercentile(
+        IReadOnlyList<ChipBucket> distribution,
+        decimal totalVolume,
+        decimal percentile)
+    {
+        if (distribution.Count == 0 || totalVolume <= 0)
+        {
+            return 0m;
+        }
+
+        var threshold = totalVolume * percentile;
+        var cumulative = 0m;
+        foreach (var item in distribution.OrderBy(item => item.Price))
+        {
+            cumulative += item.Volume;
+            if (cumulative >= threshold)
+            {
+                return item.Price;
+            }
+        }
+
+        return distribution[^1].Price;
+    }
+
+    private static void DrawChipOutline(
+        DrawingContext dc,
+        IReadOnlyList<ChipBucket> distribution,
+        decimal maxVolume,
+        double barLeft,
+        double barRight,
+        Rect rect)
+    {
+        if (distribution.Count == 0 || maxVolume <= 0m)
+        {
+            return;
+        }
+
+        var maxWidth = Math.Max(1, barRight - barLeft);
+        var points = new PointCollection();
+        for (var i = 0; i < distribution.Count; i++)
+        {
+            var y = rect.Bottom - rect.Height * (i + 0.5d) / distribution.Count;
+            var width = (double)(distribution[i].Volume / maxVolume) * maxWidth;
+            points.Add(new Point(barLeft + width, y));
+        }
+
+        DrawPolyline(dc, points, Brushes.White);
+    }
+
+    private static void DrawChipStats(
+        DrawingContext dc,
+        Rect rect,
+        ChipDistributionResult result,
+        DateTime tradingTime)
+    {
+        var y = rect.Top + 6;
+        foreach (var period in new[] { 5, 10, 20, 30, 60, 100 })
+        {
+            result.PeriodShares.TryGetValue(period, out var share);
+            DrawText(dc, $"{period}周期前成本 {share:F1}%", rect.Left + 7, y, 10, TextBrush);
+            y += 16;
+        }
+
+        DrawText(dc, $"{tradingTime:yyyy-MM-dd}  获利比率 {result.WinnerRate:F1}%", rect.Left + 7, y + 2, 10, ChipYellowBrush);
+        DrawText(dc, $"平均成本 {result.AverageCost:F2}  中位 {result.Cost50:F2}", rect.Left + 7, y + 20, 10, TextBrush);
+        DrawText(dc, $"90%成本 {result.Cost5:F2}-{result.Cost95:F2}", rect.Left + 7, y + 38, 10, TextBrush);
+        DrawText(dc, $"70%成本 {result.Cost15:F2}-{result.Cost85:F2}", rect.Left + 7, y + 56, 10, MutedTextBrush);
     }
 
     private static void DrawChipPriceLabels(
@@ -1070,6 +1426,21 @@ public sealed class KLineChartControl : FrameworkElement
         dc.DrawText(formattedText, new Point(x, y));
     }
 
+    private static void DrawInlineText(DrawingContext dc, ref double x, string text, double size, Brush brush, double y)
+    {
+        var formattedText = new FormattedText(
+            text,
+            System.Globalization.CultureInfo.GetCultureInfo("zh-CN"),
+            FlowDirection.LeftToRight,
+            new Typeface("Microsoft YaHei UI"),
+            size,
+            brush,
+            1.0);
+
+        dc.DrawText(formattedText, new Point(x, y));
+        x += formattedText.WidthIncludingTrailingWhitespace;
+    }
+
     private static double MapY(decimal value, decimal min, decimal max, Rect rect)
     {
         if (max <= min)
@@ -1104,6 +1475,12 @@ public sealed class KLineChartControl : FrameworkElement
         return candles.TakeLast(count).Average(item => item.Close);
     }
 
+    private static decimal AverageVolume(IReadOnlyList<KLineCandle> candles, int window)
+    {
+        var count = Math.Min(window, candles.Count);
+        return candles.TakeLast(count).Average(item => item.Volume);
+    }
+
     private IReadOnlyList<KLineCandle> GetVisibleCandles(IReadOnlyList<KLineCandle> candles)
     {
         if (candles.Count == 0)
@@ -1127,4 +1504,16 @@ public sealed class KLineChartControl : FrameworkElement
     }
 
     private sealed record ChipBucket(decimal Price, decimal Volume);
+
+    private sealed record ChipDistributionResult(
+        IReadOnlyList<ChipBucket> Buckets,
+        decimal WinnerRate,
+        decimal AverageCost,
+        decimal PeakPrice,
+        decimal Cost5,
+        decimal Cost15,
+        decimal Cost50,
+        decimal Cost85,
+        decimal Cost95,
+        IReadOnlyDictionary<int, decimal> PeriodShares);
 }

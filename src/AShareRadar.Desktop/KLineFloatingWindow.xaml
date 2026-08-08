@@ -1,0 +1,93 @@
+<Window x:Class="AShareRadar.Desktop.KLineFloatingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:AShareRadar.Desktop.Controls"
+        Title="K线窗口"
+        Height="760"
+        Width="1180"
+        MinHeight="560"
+        MinWidth="900"
+        WindowStartupLocation="CenterOwner"
+        Background="#050707"
+        FontFamily="Microsoft YaHei UI">
+    <Window.Resources>
+        <Style x:Key="ChartToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="#070909" />
+            <Setter Property="Foreground" Value="#8A9298" />
+            <Setter Property="BorderBrush" Value="#272B2F" />
+            <Setter Property="BorderThickness" Value="0,0,1,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#11181D" />
+                                <Setter Property="Foreground" Value="#E6EDF3" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ChartToolbarSelectedButtonStyle" TargetType="Button" BasedOn="{StaticResource ChartToolbarButtonStyle}">
+            <Setter Property="Background" Value="#FF8A00" />
+            <Setter Property="Foreground" Value="#050505" />
+            <Setter Property="BorderBrush" Value="#FF8A00" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="42" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="24" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#090D10" BorderBrush="#1C252C" BorderThickness="0,0,0,1">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <TextBlock x:Name="SymbolTitleText" Foreground="#E6EDF3" FontSize="15" FontWeight="SemiBold" Text="未选择" VerticalAlignment="Center" />
+                    <TextBlock x:Name="CaptionText" Margin="12,1,0,0" Foreground="#69747A" FontSize="12" Text="点击机会池 K 线按钮加载个股走势" VerticalAlignment="Center" />
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,10,0">
+                    <Button x:Name="MinutePeriodButton" Content="分时" Style="{StaticResource ChartToolbarButtonStyle}" Click="MinutePeriodButton_Click" />
+                    <Button x:Name="FiveDayPeriodButton" Content="5日" Style="{StaticResource ChartToolbarButtonStyle}" Click="FiveDayPeriodButton_Click" />
+                    <Button x:Name="M1PeriodButton" Content="1分" Style="{StaticResource ChartToolbarButtonStyle}" Click="M1PeriodButton_Click" />
+                    <Button x:Name="M5PeriodButton" Content="5分" Style="{StaticResource ChartToolbarButtonStyle}" Click="M5PeriodButton_Click" />
+                    <Button x:Name="M15PeriodButton" Content="15分" Style="{StaticResource ChartToolbarButtonStyle}" Click="M15PeriodButton_Click" />
+                    <Button x:Name="M30PeriodButton" Content="30分" Style="{StaticResource ChartToolbarButtonStyle}" Click="M30PeriodButton_Click" />
+                    <Button x:Name="M60PeriodButton" Content="60分" Style="{StaticResource ChartToolbarButtonStyle}" Click="M60PeriodButton_Click" />
+                    <Button x:Name="DayPeriodButton" Content="日线" Style="{StaticResource ChartToolbarSelectedButtonStyle}" Click="DayPeriodButton_Click" />
+                    <Button x:Name="WeekPeriodButton" Content="周线" Style="{StaticResource ChartToolbarButtonStyle}" Click="WeekPeriodButton_Click" />
+                    <Button x:Name="MonthPeriodButton" Content="月线" Style="{StaticResource ChartToolbarButtonStyle}" Click="MonthPeriodButton_Click" />
+                    <Button x:Name="MacdIndicatorButton" Content="MACD" Style="{StaticResource ChartToolbarSelectedButtonStyle}" Click="MacdIndicatorButton_Click" />
+                    <Button x:Name="KdjIndicatorButton" Content="KDJ" Style="{StaticResource ChartToolbarButtonStyle}" Click="KdjIndicatorButton_Click" />
+                    <Button x:Name="RsiIndicatorButton" Content="RSI" Style="{StaticResource ChartToolbarButtonStyle}" Click="RsiIndicatorButton_Click" />
+                    <Button Width="54" Content="刷新" Style="{StaticResource ChartToolbarButtonStyle}" Click="RefreshButton_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Background="#040707" BorderBrush="#303437" BorderThickness="1" ClipToBounds="True">
+            <controls:KLineChartControl x:Name="KLineChart"
+                                        HorizontalAlignment="Stretch"
+                                        VerticalAlignment="Stretch" />
+        </Border>
+
+        <Border Grid.Row="2" Background="#090D10" BorderBrush="#1C252C" BorderThickness="0,1,0,0">
+            <TextBlock x:Name="StatusText" Margin="12,0" Foreground="#69747A" FontSize="12" Text="就绪" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </Border>
+    </Grid>
+</Window>

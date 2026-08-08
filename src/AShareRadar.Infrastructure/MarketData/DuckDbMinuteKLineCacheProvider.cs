@@ -147,7 +147,7 @@ public sealed class DuckDbMinuteKLineCacheProvider : IBatchKLineDataProvider
 
         using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT trading_time, open, high, low, close, volume
+            SELECT trading_time, open, high, low, close, volume, amount
             FROM minute_bars
             WHERE code = '{Escape(symbol)}'
             ORDER BY trading_time DESC
@@ -191,11 +191,12 @@ public sealed class DuckDbMinuteKLineCacheProvider : IBatchKLineDataProvider
                     low,
                     close,
                     volume,
+                    amount,
                     row_number() OVER (PARTITION BY code ORDER BY trading_time DESC) AS rn
                 FROM minute_bars
                 WHERE code IN ({string.Join(",", symbolList)})
             )
-            SELECT code, trading_time, open, high, low, close, volume
+            SELECT code, trading_time, open, high, low, close, volume, amount
             FROM ranked
             WHERE rn <= {Math.Clamp(count, 1, MaxBarCount)}
             ORDER BY code ASC, trading_time ASC;
@@ -230,7 +231,8 @@ public sealed class DuckDbMinuteKLineCacheProvider : IBatchKLineDataProvider
             ReadDecimal(reader, offset + 2),
             ReadDecimal(reader, offset + 3),
             ReadDecimal(reader, offset + 4),
-            ReadDecimal(reader, offset + 5));
+            ReadDecimal(reader, offset + 5),
+            ReadDecimal(reader, offset + 6));
     }
 
     private static bool IsFreshEnough(IReadOnlyList<KLineBar> bars)

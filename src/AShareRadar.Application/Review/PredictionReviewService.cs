@@ -37,6 +37,14 @@ public sealed class PredictionReviewService
 
     public PredictionReview Generate(DateOnly signalDate)
     {
+        return GenerateAsync(signalDate).GetAwaiter().GetResult();
+    }
+
+    public async Task<PredictionReview> GenerateAsync(
+        DateOnly signalDate,
+        CancellationToken cancellationToken = default,
+        Action<string, bool>? lineSink = null)
+    {
         var signals = _historyQueryService.QuerySignals(new HistoricalSignalQuery(signalDate, null, null, PredictionSignalLimit));
         var signalGroups = signals
             .Where(item => item.Price is > 0)
@@ -51,9 +59,11 @@ public sealed class PredictionReviewService
             return BuildReview(signalDate, [], "当天没有可用于预测的命中记录。");
         }
 
-        var runResult = _qlibPredictionRunner.RunAsync(signalDate, signalGroups.Keys.OrderBy(item => item).ToArray())
-            .GetAwaiter()
-            .GetResult();
+        var runResult = await _qlibPredictionRunner.RunAsync(
+            signalDate,
+            signalGroups.Keys.OrderBy(item => item).ToArray(),
+            cancellationToken,
+            lineSink);
 
         var records = runResult.Predictions
             .Where(item => signalGroups.ContainsKey(item.Symbol))

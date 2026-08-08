@@ -51,6 +51,7 @@ public sealed class CounterTrendStrengthStrategy : ISignalStrategy
         StrategyContext context,
         CancellationToken cancellationToken)
     {
+        var isObservationRun = context.RunMode == StrategyRunMode.Observation;
         if (context.Snapshot.Quotes.Count == 0)
         {
             return Task.FromResult<IReadOnlyList<StrategySignal>>([]);
@@ -65,20 +66,20 @@ public sealed class CounterTrendStrengthStrategy : ISignalStrategy
 
         var signals = context.Snapshot.Quotes
             .Where(item => item.Price > 0
-                && item.ChangePercent >= MinChangePercent
+                && (isObservationRun || item.ChangePercent >= MinChangePercent)
                 && item.ChangePercent - marketAverageChange >= MinRelativeStrengthPercent
-                && item.VolumeRatio >= MinVolumeRatio)
-            .Select(item => BuildSignal(item, context, marketAverageChange))
+                && (isObservationRun || item.VolumeRatio >= MinVolumeRatio))
+            .Select(item => BuildSignal(item, context, marketAverageChange, isObservationRun))
             .Where(item => item is not null)
             .Select(item => item!)
             .OrderByDescending(item => item.Score)
-            .Take(5)
+            .Take(isObservationRun ? 12 : 5)
             .ToArray();
 
         return Task.FromResult<IReadOnlyList<StrategySignal>>(signals);
     }
 
-    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context, decimal marketAverageChange)
+    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context, decimal marketAverageChange, bool isObservationRun)
     {
         if (context.DailyBarsBySymbol is null
             || !context.DailyBarsBySymbol.TryGetValue(quote.Symbol, out var bars)
@@ -116,6 +117,16 @@ public sealed class CounterTrendStrengthStrategy : ISignalStrategy
         var closePositionPercent = CalculateClosePositionPercent(currentBar, quote.Price);
         var upperShadowPercent = CalculateUpperShadowPercent(currentBar, quote.Price);
 
+        var structuralFailedConditions = BuildStructuralFailedConditions(
+            relativeStrengthPercent,
+            priceAboveMa20Percent,
+            trendStrengthPercent,
+            recentFiveDayChangePercent);
+        if (structuralFailedConditions.Count > 0)
+        {
+            return null;
+        }
+
         var failedConditions = BuildFailedConditions(
             relativeStrengthPercent,
             priceAboveMa20Percent,
@@ -127,12 +138,15 @@ public sealed class CounterTrendStrengthStrategy : ISignalStrategy
             upperShadowPercent,
             quote.Price,
             latestClose);
-        if (failedConditions.Count > 0)
+        if (failedConditions.Count > 0 && !isObservationRun)
         {
             return null;
         }
 
-        var confidence = relativeStrengthPercent >= 2.5m
+        var isRealtimeConfirmed = failedConditions.Count == 0;
+        var confidence = !isRealtimeConfirmed
+            ? StrategySignalConfidence.Low
+            : relativeStrengthPercent >= 2.5m
             && trendStrengthPercent >= 0m
             && quote.VolumeRatio >= 1.2m
             && upperShadowPercent <= 20m
@@ -155,7 +169,7 @@ public sealed class CounterTrendStrengthStrategy : ISignalStrategy
             Price: quote.Price,
             Reason: $"市场均值 {marketAverageChange:F2}%，个股涨幅 {quote.ChangePercent:F2}%，相对强度 {relativeStrengthPercent:F2}%，当前距离 MA20 {priceAboveMa20Percent:F1}%，量比 {quote.VolumeRatio:F2}。",
             Risk: BuildRisk(priceAboveMa20Percent, recentFiveDayChangePercent, upperShadowPercent, trendStrengthPercent),
-            Action: confidence == StrategySignalConfidence.High ? StrategySignalAction.Candidate : StrategySignalAction.Watch,
+            Action: confidence == StrategySignalConfidence.High && isRealtimeConfirmed ? StrategySignalAction.Candidate : StrategySignalAction.Watch,
             Confidence: confidence,
             Stage: StrategyStage.CandidateRanking,
             Metrics: new Dictionary<string, decimal>
@@ -224,6 +238,36 @@ public sealed class CounterTrendStrengthStrategy : ISignalStrategy
             FailedConditions: ["历史日 K 数量不足，未完成趋势位置验证"],
             StopLossPrice: Math.Round(quote.Price * 0.95m, 2),
             TakeProfitPrice: Math.Round(quote.Price * 1.04m, 2));
+    }
+
+    private static List<string> BuildStructuralFailedConditions(
+        decimal relativeStrengthPercent,
+        decimal priceAboveMa20Percent,
+        decimal trendStrengthPercent,
+        decimal recentFiveDayChangePercent)
+    {
+        var failed = new List<string>();
+        if (relativeStrengthPercent < MinRelativeStrengthPercent)
+        {
+            failed.Add($"相对强度 {relativeStrengthPercent:F2}% < {MinRelativeStrengthPercent:F1}%");
+        }
+
+        if (priceAboveMa20Percent < -3m || priceAboveMa20Percent > MaxDistanceFromMa20Percent)
+        {
+            failed.Add($"距离 MA20 {priceAboveMa20Percent:F1}% 不在合理区间");
+        }
+
+        if (trendStrengthPercent < -5m)
+        {
+            failed.Add($"中期趋势偏弱，MA20 低于 MA60 {Math.Abs(trendStrengthPercent):F1}%");
+        }
+
+        if (recentFiveDayChangePercent > MaxRecentFiveDayChangePercent)
+        {
+            failed.Add($"近 {RecentLookback} 日涨幅 {recentFiveDayChangePercent:F1}% 过热");
+        }
+
+        return failed;
     }
 
     private static List<string> BuildFailedConditions(

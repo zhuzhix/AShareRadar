@@ -6,4 +6,6 @@ public sealed record KLineBar(
     decimal High,
     decimal Low,
     decimal Close,
-    decimal Volume);
+    decimal Volume,
+    decimal Amount = 0m,
+    decimal? TurnoverRate = null);

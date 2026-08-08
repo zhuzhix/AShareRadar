@@ -111,28 +111,6 @@ public sealed class SqliteDatabase
                 UNIQUE(signal_date, symbol)
             );
 
-            CREATE TABLE IF NOT EXISTS qlib_signal_seeds (
-                id TEXT PRIMARY KEY,
-                signal_date TEXT NOT NULL,
-                code TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                exchange TEXT NOT NULL,
-                name TEXT NOT NULL,
-                pred_score TEXT NOT NULL,
-                rank_total INTEGER NOT NULL,
-                model_rank INTEGER NOT NULL,
-                model_score_100 TEXT NOT NULL,
-                target_weight TEXT NOT NULL,
-                action TEXT NOT NULL,
-                confidence TEXT NOT NULL,
-                strategy_code TEXT NOT NULL,
-                strategy_name TEXT NOT NULL,
-                source_experiment_id TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                risk TEXT NULL,
-                imported_at TEXT NOT NULL,
-                UNIQUE(signal_date, strategy_code, symbol)
-            );
             CREATE TABLE IF NOT EXISTS market_sentiment_snapshots (
                 id TEXT PRIMARY KEY,
                 snapshot_time TEXT NOT NULL,
@@ -147,77 +125,53 @@ public sealed class SqliteDatabase
                 created_at TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS strategy_training_samples (
+            CREATE TABLE IF NOT EXISTS long_term_tracking_items (
                 id TEXT PRIMARY KEY,
-                signal_date TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 name TEXT NOT NULL,
                 strategy_code TEXT NOT NULL,
                 strategy_name TEXT NOT NULL,
-                score TEXT NOT NULL,
-                price TEXT NULL,
-                amount_yi TEXT NULL,
-                change_percent TEXT NULL,
-                volume_ratio TEXT NULL,
-                relative_strength_percent TEXT NULL,
-                sector_heat_score TEXT NULL,
-                concept_heat_score TEXT NULL,
-                sentiment_temperature TEXT NULL,
-                next_open_return TEXT NULL,
-                next_high_return TEXT NULL,
-                next_close_return TEXT NULL,
-                is_success INTEGER NOT NULL,
-                reason TEXT NOT NULL,
-                evaluation_days INTEGER NOT NULL DEFAULT 1,
-                metrics_json TEXT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(signal_date, symbol, strategy_code)
-            );
-
-            CREATE TABLE IF NOT EXISTS strategy_training_runs (
-                id TEXT PRIMARY KEY,
-                start_date TEXT NOT NULL,
-                end_date TEXT NOT NULL,
-                strategy_code TEXT NULL,
-                source_signal_count INTEGER NOT NULL,
-                sample_count INTEGER NOT NULL,
-                result_count INTEGER NOT NULL,
-                message TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS strategy_training_results (
-                run_id TEXT NOT NULL,
-                rank INTEGER NOT NULL,
-                min_score TEXT NOT NULL,
-                min_amount_yi TEXT NOT NULL,
-                min_relative_strength_percent TEXT NOT NULL,
-                min_heat_score TEXT NOT NULL,
-                max_output_per_day INTEGER NOT NULL,
+                first_hit_at TEXT NOT NULL,
+                last_hit_at TEXT NOT NULL,
                 hit_count INTEGER NOT NULL,
-                success_count INTEGER NOT NULL,
-                success_rate TEXT NULL,
-                average_next_open_return TEXT NULL,
-                average_next_high_return TEXT NULL,
-                average_next_close_return TEXT NULL,
-                worst_next_close_return TEXT NULL,
-                summary TEXT NOT NULL,
-                PRIMARY KEY (run_id, rank)
+                latest_price TEXT NULL,
+                latest_score TEXT NOT NULL,
+                best_score TEXT NOT NULL,
+                latest_reason TEXT NOT NULL,
+                latest_risk TEXT NULL,
+                status TEXT NOT NULL,
+                manual_priority INTEGER NOT NULL DEFAULT 0,
+                note TEXT NULL,
+                tags TEXT NULL,
+                latest_event_id TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(symbol, strategy_code)
             );
 
-            CREATE TABLE IF NOT EXISTS strategy_parameter_profiles (
+            CREATE TABLE IF NOT EXISTS background_jobs (
                 id TEXT PRIMARY KEY,
-                strategy_code TEXT NOT NULL,
-                profile_name TEXT NOT NULL,
-                source_training_run_id TEXT NULL,
-                parameters_json TEXT NOT NULL,
-                sample_count INTEGER NOT NULL,
-                success_rate TEXT NULL,
-                average_next_high_return TEXT NULL,
-                average_next_close_return TEXT NULL,
-                is_active INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                progress_percent INTEGER NOT NULL,
+                current_step TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                activated_at TEXT NULL
+                started_at TEXT NULL,
+                finished_at TEXT NULL,
+                exit_code INTEGER NULL,
+                error_message TEXT NULL,
+                fix_suggestion TEXT NULL,
+                payload_json TEXT NOT NULL,
+                result_json TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS background_job_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                stream TEXT NOT NULL,
+                message TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS ix_opportunities_symbol ON opportunities(symbol);
@@ -225,12 +179,12 @@ public sealed class SqliteDatabase
             CREATE INDEX IF NOT EXISTS ix_signal_events_event_time ON signal_events(event_time);
             CREATE INDEX IF NOT EXISTS ix_prediction_records_date ON prediction_records(signal_date);
             CREATE INDEX IF NOT EXISTS ix_market_sentiment_snapshot_time ON market_sentiment_snapshots(snapshot_time);
-            CREATE INDEX IF NOT EXISTS ix_qlib_signal_seeds_date ON qlib_signal_seeds(signal_date, strategy_code);
-            CREATE INDEX IF NOT EXISTS ix_qlib_signal_seeds_symbol ON qlib_signal_seeds(symbol);
-            CREATE INDEX IF NOT EXISTS ix_strategy_training_samples_date ON strategy_training_samples(signal_date);
-            CREATE INDEX IF NOT EXISTS ix_strategy_training_samples_strategy ON strategy_training_samples(strategy_code, signal_date);
-            CREATE INDEX IF NOT EXISTS ix_strategy_training_runs_created_at ON strategy_training_runs(created_at);
-            CREATE INDEX IF NOT EXISTS ix_strategy_parameter_profiles_strategy ON strategy_parameter_profiles(strategy_code, is_active);
+            CREATE INDEX IF NOT EXISTS ix_long_term_tracking_last_hit_at ON long_term_tracking_items(last_hit_at);
+            CREATE INDEX IF NOT EXISTS ix_long_term_tracking_strategy ON long_term_tracking_items(strategy_code, status);
+            CREATE INDEX IF NOT EXISTS ix_long_term_tracking_symbol ON long_term_tracking_items(symbol);
+            CREATE INDEX IF NOT EXISTS ix_background_jobs_type_created ON background_jobs(type, created_at);
+            CREATE INDEX IF NOT EXISTS ix_background_jobs_status ON background_jobs(status, created_at);
+            CREATE INDEX IF NOT EXISTS ix_background_job_logs_job ON background_job_logs(job_id, id);
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "strategy_hits", "metrics_json", "TEXT NULL");
@@ -239,9 +193,9 @@ public sealed class SqliteDatabase
         EnsureColumn(connection, "strategy_hits", "failed_conditions_json", "TEXT NULL");
         EnsureColumn(connection, "strategy_hits", "stop_loss_price", "TEXT NULL");
         EnsureColumn(connection, "strategy_hits", "take_profit_price", "TEXT NULL");
-        EnsureColumn(connection, "strategy_training_samples", "evaluation_days", "INTEGER NOT NULL DEFAULT 1");
-        EnsureColumn(connection, "strategy_training_samples", "metrics_json", "TEXT NULL");
         DropDeprecatedStockPoolTables(connection);
+        DropDeprecatedStrategyTrainingTables(connection);
+        DropDeprecatedLowSparkTables(connection);
     }
 
     private static void DropDeprecatedStockPoolTables(SqliteConnection connection)
@@ -251,6 +205,27 @@ public sealed class SqliteDatabase
             DROP TABLE IF EXISTS stock_pool_review_sources;
             DROP TABLE IF EXISTS stock_pool_items;
             DROP TABLE IF EXISTS stock_pools;
+            """;
+        drop.ExecuteNonQuery();
+    }
+
+    private static void DropDeprecatedStrategyTrainingTables(SqliteConnection connection)
+    {
+        using var drop = connection.CreateCommand();
+        drop.CommandText = """
+            DROP TABLE IF EXISTS strategy_training_results;
+            DROP TABLE IF EXISTS strategy_training_runs;
+            DROP TABLE IF EXISTS strategy_training_samples;
+            DROP TABLE IF EXISTS strategy_parameter_profiles;
+            """;
+        drop.ExecuteNonQuery();
+    }
+
+    private static void DropDeprecatedLowSparkTables(SqliteConnection connection)
+    {
+        using var drop = connection.CreateCommand();
+        drop.CommandText = """
+            DROP TABLE IF EXISTS qlib_signal_seeds;
             """;
         drop.ExecuteNonQuery();
     }

@@ -114,7 +114,8 @@ public sealed class TencentKLineDataProvider : IKLineDataProvider
                     items.Max(item => item.High),
                     items.Min(item => item.Low),
                     items[^1].Close,
-                    items.Sum(item => item.Volume));
+                    items.Sum(item => item.Volume),
+                    items.Sum(item => item.Amount));
             });
     }
 

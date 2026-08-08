@@ -6,6 +6,8 @@
 
   <ItemGroup>
     <PackageReference Include="HandyControl" Version="3.5.1" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="NLog" Version="5.4.0" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -20,6 +22,7 @@
   <ItemGroup>
     <Resource Include="Assets\app-icon.ico" />
     <Resource Include="Assets\app-icon.png" />
+    <Content Include="NLog.config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

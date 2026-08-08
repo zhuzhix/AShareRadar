@@ -1,6 +1,10 @@
 ﻿using System.IO;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -9,20 +13,26 @@ using System.Windows.Threading;
 using AShareRadar.Desktop.Controls;
 using AShareRadar.Contracts.Backtesting;
 using AShareRadar.Contracts.History;
+using AShareRadar.Contracts.Jobs;
 using AShareRadar.Contracts.MarketData;
 using AShareRadar.Contracts.Monitoring;
 using AShareRadar.Contracts.Opportunities;
-using AShareRadar.Contracts.Qlib;
 using AShareRadar.Contracts.Review;
 using AShareRadar.Contracts.Strategies;
-using AShareRadar.Contracts.StrategyTraining;
 using AShareRadar.Desktop.Services;
 using Microsoft.Win32;
+using Microsoft.Web.WebView2.Wpf;
+using Microsoft.Web.WebView2.Core;
 
 namespace AShareRadar.Desktop;
 
 public partial class MainWindow : Window
 {
+    private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+    private static readonly NLog.Logger MappingLogger = NLog.LogManager.GetLogger("AShareRadar.Mapping.Desktop");
+    private WebView2? _mappingWebView;
+    private string? _activeMappingTraceId;
+    private string? _activeMappingRunId;
     private readonly RadarApiClient _apiClient = new("http://127.0.0.1:18730");
     private readonly MinimalSignalRClient _realtimeClient = new("http://127.0.0.1:18730/hubs/monitor");
     private readonly DispatcherTimer _refreshTimer;
@@ -38,35 +48,34 @@ public partial class MainWindow : Window
     private bool _showHistory;
     private bool _showPredictionReview;
     private bool _showStrategyCenter;
-    private bool _showStrategyTraining;
+    private bool _showLongTermTracking;
     private bool _showBacktest;
     private bool _showStockPools;
-    private bool _showQlibStrategy;
     private bool _showResearchPage;
     private bool _isRefreshingOpportunityList;
     private int _dailyHitCount;
+    private IReadOnlyList<DailyHitDisplay> _dailyHitItems = [];
     private DateOnly? _historyTradingDate;
     private DateOnly _predictionDate = DateOnly.FromDateTime(DateTime.Today);
     private string? _historySymbol;
     private string? _historyStrategyCode;
     private BacktestReplayResultDto? _lastBacktestResult;
     private bool _isResearchDialogOpen;
+    private KLineFloatingWindow? _floatingKLineWindow;
+    private Guid? _latestBackgroundJobId;
+    private Guid? _lastAutoRefreshedPredictionJobId;
+    private IReadOnlyList<HeatBoardItemDto> _mappingSectorHeatItems = [];
+    private IReadOnlyList<HeatBoardItemDto> _mappingConceptHeatItems = [];
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializeMappingBrowser();
         HistoryDatePicker.SelectedDate = null;
         PredictionDatePicker.SelectedDate = DateTime.Today;
         BacktestStartDatePicker.SelectedDate = DateTime.Today.AddDays(-60);
         BacktestEndDatePicker.SelectedDate = DateTime.Today;
-        StrategyTrainingStartDatePicker.SelectedDate = DateTime.Today.AddDays(-60);
-        StrategyTrainingEndDatePicker.SelectedDate = DateTime.Today;
         StockPoolHitDatePicker.SelectedDate = DateTime.Today;
-        StrategyTrainingStrategyComboBox.ItemsSource = new[]
-        {
-            new StrategyTrainingOptionDisplay(null, "全部策略")
-        };
-        StrategyTrainingStrategyComboBox.SelectedIndex = 0;
         ApplyWorkspaceVisibility();
         ApplyKLineButtonStyles();
 
@@ -85,52 +94,389 @@ public partial class MainWindow : Window
         Closed += async (_, _) => await _realtimeClient.DisposeAsync();
     }
 
-    private async void StartButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RunUiActionAsync(async token =>
-        {
-            await _apiClient.StartAsync(GetSelectedIntervalSeconds(), token);
-            await RefreshAsync(token);
-        });
-    }
-
-    private async void PauseButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RunUiActionAsync(async token =>
-        {
-            await _apiClient.PauseAsync(token);
-            await RefreshAsync(token);
-        });
-    }
-
-    private async void ScanOnceButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RunUiActionAsync(async token =>
-        {
-            await _apiClient.ScanOnceAsync(token);
-            await RefreshAsync(token);
-        });
-    }
-
     private async void UpdateHistoryDataButton_Click(object sender, RoutedEventArgs e)
     {
         await RunUiActionAsync(async token =>
         {
-            HistoricalDataStatusText.Text = "历史数据：正在启动更新...";
-            var status = await _apiClient.TriggerHistoricalDataUpdateAsync(token);
-            ApplyHistoricalDataUpdateStatus(status);
+            HistoricalDataStatusText.Text = "历史数据：已提交后台任务...";
+            var response = await _apiClient.TriggerHistoricalDataUpdateAsync(token);
+            _latestBackgroundJobId = response?.JobId;
+            await RefreshBackgroundJobStatusAsync(token);
+        });
+    }
+
+    private async void InitializeMappingBrowser()
+    {
+        var stopwatch = Stopwatch.StartNew();
+        MappingLogger.Info("WebView2 initialization started. BaseDirectory={BaseDirectory}", AppContext.BaseDirectory);
+        try
+        {
+            _mappingWebView = MappingWebView;
+            await _mappingWebView.EnsureCoreWebView2Async();
+            _mappingWebView.CoreWebView2.WebResourceResponseReceived += MappingWebResourceResponseReceived;
+            _mappingWebView.CoreWebView2.NavigationStarting += (_, args) =>
+                MappingLogger.Info("WebView2 navigation started. NavigationId={NavigationId} Uri={Uri} TraceId={TraceId}", args.NavigationId, args.Uri, _activeMappingTraceId);
+            _mappingWebView.CoreWebView2.NavigationCompleted += (_, args) =>
+                MappingLogger.Info(
+                    "WebView2 navigation completed. NavigationId={NavigationId} Success={Success} WebErrorStatus={WebErrorStatus} TraceId={TraceId}",
+                    args.NavigationId,
+                    args.IsSuccess,
+                    args.WebErrorStatus,
+                    _activeMappingTraceId);
+            MappingLogger.Info(
+                "WebView2 initialization completed. RuntimeVersion={RuntimeVersion} UserDataFolder={UserDataFolder} ElapsedMs={ElapsedMs}",
+                _mappingWebView.CoreWebView2.Environment.BrowserVersionString,
+                _mappingWebView.CoreWebView2.Environment.UserDataFolder,
+                stopwatch.ElapsedMilliseconds);
+            _mappingWebView.CoreWebView2.Navigate("https://quote.eastmoney.com/center/gridlist.html#concept_board");
+        }
+        catch (Exception ex)
+        {
+            MappingLogger.Error(ex, "WebView2 initialization failed. ElapsedMs={ElapsedMs}", stopwatch.ElapsedMilliseconds);
+        }
+    }
+
+    private void MappingWebResourceResponseReceived(object? sender, CoreWebView2WebResourceResponseReceivedEventArgs e)
+    {
+        if (_activeMappingTraceId is not null && e.Request.Uri.Contains("push2.eastmoney.com/api/qt/clist/get", StringComparison.OrdinalIgnoreCase))
+        {
+            string? contentType = null;
+            try
+            {
+                contentType = e.Response.Headers.GetHeader("Content-Type");
+            }
+            catch (Exception ex)
+            {
+                MappingLogger.Debug(ex, "EastMoney response Content-Type could not be read. TraceId={TraceId} Uri={Uri}", _activeMappingTraceId, e.Request.Uri);
+            }
+
+            MappingLogger.Info(
+                "EastMoney response received. TraceId={TraceId} Method={Method} StatusCode={StatusCode} ContentType={ContentType} Uri={Uri}",
+                _activeMappingTraceId,
+                e.Request.Method,
+                e.Response.StatusCode,
+                contentType,
+                e.Request.Uri);
+        }
+    }
+
+    private async void UpdateM30KLineButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunUiActionAsync(async token =>
+        {
+            BackgroundJobStatusText.Text = "后台任务：已提交30分钟K更新...";
+            var response = await _apiClient.StartM30KLineUpdateJobAsync(token);
+            _latestBackgroundJobId = response?.JobId;
+            await RefreshBackgroundJobStatusAsync(token);
         });
     }
 
     private async void UpdateMarketMappingButton_Click(object sender, RoutedEventArgs e)
     {
-        await RunUiActionAsync(async token =>
+        var traceId = $"mapping-{DateTime.Now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
+        using var traceScope = NLog.ScopeContext.PushProperty("TraceId", traceId);
+        MappingLogger.Info("Mapping update button clicked. TraceId={TraceId}", traceId);
+        _refreshTimer.Stop();
+        try
         {
-            MappingUpdateStatusText.Text = "概念行业：正在启动更新...";
-            var status = await _apiClient.TriggerMarketMappingUpdateAsync(token);
-            ApplyMarketMappingUpdateStatus(status);
-        });
+            await RunUiActionAsync(async token =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                try
+                {
+                    MappingUpdateStatusText.Text = "概念行业：正在通过 WebView2 获取...";
+                    MappingPageStateText.Text = "采集中";
+                    MappingPageStateText.Visibility = Visibility.Visible;
+                    MappingPageErrorText.Visibility = Visibility.Collapsed;
+                    var payload = await UpdateMappingsFromWebViewAsync(traceId, token);
+                    MappingUpdateStatusText.Text = "概念行业：正在同步服务端...";
+                    MappingPageStateText.Text = "同步中";
+                    var sectorRows = payload.Sectors
+                        .SelectMany(board => board.Members.Select(member => new MarketMappingRowDto(member.Symbol, board.Code, board.Name)))
+                        .ToArray();
+                    var conceptRows = payload.Concepts
+                        .SelectMany(board => board.Members.Select(member => new MarketMappingRowDto(member.Symbol, board.Code, board.Name)))
+                        .ToArray();
+                    var request = new MarketMappingSyncRequest(traceId, DateTimeOffset.Now, sectorRows, conceptRows);
+
+                    MappingLogger.Info(
+                        "Service upload requested. TraceId={TraceId} SectorRows={SectorRows} ConceptRows={ConceptRows}",
+                        traceId,
+                        sectorRows.Length,
+                        conceptRows.Length);
+                    using var uploadTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    uploadTimeout.CancelAfter(TimeSpan.FromMinutes(2));
+                    var result = await _realtimeClient.UploadMarketMappingsAsync(request, uploadTimeout.Token);
+                    if (!result.Success)
+                    {
+                        throw new InvalidOperationException(result.Error ?? result.Message);
+                    }
+
+                    MappingLogger.Info("Refreshing Desktop data after service upload. TraceId={TraceId}", traceId);
+                    MappingPageStateText.Text = "刷新中";
+                    using var refreshTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    refreshTimeout.CancelAfter(TimeSpan.FromMinutes(2));
+                    await RefreshAsync(refreshTimeout.Token);
+                    MappingLogger.Info(
+                        "Mapping update UI flow completed. TraceId={TraceId} Version={Version} SectorRows={SectorRows} ConceptRows={ConceptRows} ElapsedMs={ElapsedMs}",
+                        traceId,
+                        result.Version,
+                        result.SectorRows,
+                        result.ConceptRows,
+                        stopwatch.ElapsedMilliseconds);
+                    MappingUpdateStatusText.Text = $"概念行业：更新完成，行业 {result.SectorRows} / 概念 {result.ConceptRows}";
+                    MappingPageStateText.Text = "更新完成";
+                    MappingPageSummaryText.Text = $"行业映射 {result.SectorRows:N0} | 概念映射 {result.ConceptRows:N0} | 更新时间 {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+                }
+                catch (Exception ex)
+                {
+                    _activeMappingTraceId = null;
+                    MappingPageStateText.Text = "更新失败";
+                    MappingPageErrorText.Text = ex is OperationCanceledException ? "采集或同步超时，任务已终止。" : ex.Message;
+                    MappingPageErrorText.Visibility = Visibility.Visible;
+                    MappingLogger.Error(ex, "Mapping update UI flow failed. TraceId={TraceId} ElapsedMs={ElapsedMs}", traceId, stopwatch.ElapsedMilliseconds);
+                    throw;
+                }
+            }, TimeSpan.FromMinutes(10));
+        }
+        finally
+        {
+            _refreshTimer.Start();
+        }
     }
+
+    private async Task<MappingPayload> UpdateMappingsFromWebViewAsync(string traceId, CancellationToken cancellationToken)
+    {
+        if (_mappingWebView?.CoreWebView2 is null)
+        {
+            MappingLogger.Error("Mapping collection cannot start because WebView2 is not initialized. TraceId={TraceId}", traceId);
+            throw new InvalidOperationException("WebView2 尚未初始化。");
+        }
+
+        const string targetUri = "https://quote.eastmoney.com/center/gridlist.html#concept_board";
+        var stopwatch = Stopwatch.StartNew();
+        _activeMappingTraceId = traceId;
+        MappingLogger.Info("WebView2 mapping collection started. TraceId={TraceId} Uri={Uri}", traceId, targetUri);
+
+        var currentUri = _mappingWebView.Source?.AbsoluteUri ?? _mappingWebView.CoreWebView2.Source;
+        if (!string.Equals(currentUri, targetUri, StringComparison.OrdinalIgnoreCase))
+        {
+            var navigation = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args) => navigation.TrySetResult(args);
+            _mappingWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+            try
+            {
+                _mappingWebView.CoreWebView2.Navigate(targetUri);
+                var navigationResult = await navigation.Task.WaitAsync(TimeSpan.FromSeconds(45), cancellationToken);
+                if (!navigationResult.IsSuccess)
+                {
+                    throw new InvalidOperationException($"东方财富页面导航失败：{navigationResult.WebErrorStatus}");
+                }
+            }
+            finally
+            {
+                _mappingWebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+            }
+        }
+        MappingLogger.Info("EastMoney page ready for script. TraceId={TraceId} CurrentUri={CurrentUri} ElapsedMs={ElapsedMs}", traceId, currentUri, stopwatch.ElapsedMilliseconds);
+
+        var runId = Guid.NewGuid().ToString("N");
+        _activeMappingRunId = runId;
+        var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
+        {
+            try
+            {
+                var message = args.TryGetWebMessageAsString();
+                using var document = JsonDocument.Parse(message);
+                var root = document.RootElement;
+                if (!root.TryGetProperty("runId", out var messageRunId)
+                    || !string.Equals(messageRunId.GetString(), runId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                var kind = root.GetProperty("kind").GetString();
+                if (string.Equals(kind, "progress", StringComparison.Ordinal))
+                {
+                    var completed = root.GetProperty("completed").GetInt32();
+                    var total = root.GetProperty("total").GetInt32();
+                    var boardName = root.GetProperty("boardName").GetString();
+                    MappingUpdateStatusText.Text = $"概念行业：正在采集 {completed}/{total}，{boardName}";
+                    MappingPageStateText.Text = $"采集中 {completed}/{total}";
+                    return;
+                }
+
+                if (string.Equals(kind, "result", StringComparison.Ordinal))
+                {
+                    completion.TrySetResult(root.GetProperty("payload").GetRawText());
+                    return;
+                }
+
+                if (string.Equals(kind, "error", StringComparison.Ordinal))
+                {
+                    completion.TrySetException(new InvalidOperationException(
+                        $"东方财富采集失败：{root.GetProperty("error").GetString()}"));
+                }
+            }
+            catch (Exception ex)
+            {
+                MappingLogger.Error(ex, "WebView2 mapping message processing failed. TraceId={TraceId} RunId={RunId}", traceId, runId);
+                completion.TrySetException(ex);
+            }
+        }
+        _mappingWebView.CoreWebView2.WebMessageReceived += OnMessage;
+        var script = $$$"""
+            (async () => {
+              const runId='{{{runId}}}';
+              if(window.__asrMappingRun?.controller){
+                window.__asrMappingRun.controller.abort();
+              }
+              const controller=new AbortController();
+              const signal=controller.signal;
+              window.__asrMappingRun={runId,controller};
+              const fields='f12,f14';
+              const post=(value)=>chrome.webview.postMessage(JSON.stringify({runId,...value}));
+              async function fetchJson(url){
+                let lastError;
+                for(let attempt=1;attempt<=3;attempt++){
+                  try{
+                    const response=await fetch(url,{signal,cache:'no-store'});
+                    if(!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+                    return await response.json();
+                  }catch(error){
+                    if(signal.aborted) throw error;
+                    lastError=error;
+                    if(attempt<3) await new Promise(resolve=>setTimeout(resolve,attempt*500));
+                  }
+                }
+                throw lastError;
+              }
+              async function boards(type){
+                const pageSize=100;
+                async function page(pageNumber){
+                  const url=`https://push2.eastmoney.com/api/qt/clist/get?pn=${pageNumber}&pz=${pageSize}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:${type}&fields=${fields}`;
+                  return await fetchJson(url);
+                }
+                const first=await page(1);
+                const firstItems=first?.data?.diff||[];
+                const total=Number(first?.data?.total||firstItems.length);
+                const pageCount=Math.ceil(total/pageSize);
+                if(pageCount<=1) return firstItems;
+                const remainingPages=Array.from({length:pageCount-1},(_,index)=>index+2);
+                const remaining=await mapLimit(remainingPages,4,async pageNumber=>(await page(pageNumber))?.data?.diff||[]);
+                return firstItems.concat(...remaining);
+              }
+              async function members(board){
+                const url=`https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${board.f12}+f:!50&fields=f12,f14`;
+                const json=await fetchJson(url);
+                return (json?.data?.diff||[]).map(x=>({symbol:x.f12,name:x.f14}));
+              }
+              async function mapLimit(items,limit,work){
+                const result=new Array(items.length);
+                let next=0;
+                async function worker(){
+                  while(true){
+                    const index=next++;
+                    if(index>=items.length) return;
+                    result[index]=await work(items[index],index);
+                  }
+                }
+                await Promise.all(Array.from({length:Math.min(limit,items.length)},worker));
+                return result;
+              }
+              const [sectorBoards,conceptBoards]=await Promise.all([boards(2),boards(3)]);
+              const allBoards=[
+                ...sectorBoards.map(board=>({kind:'sector',board})),
+                ...conceptBoards.map(board=>({kind:'concept',board}))
+              ];
+              const total=allBoards.length;
+              let completed=0;
+              const collected=await mapLimit(allBoards,8,async item=>{
+                const result={code:item.board.f12,name:item.board.f14,members:await members(item.board)};
+                completed++;
+                post({kind:'progress',completed,total,boardName:item.board.f14});
+                return {kind:item.kind,result};
+              });
+              const sectors=collected.filter(x=>x.kind==='sector').map(x=>x.result);
+              const concepts=collected.filter(x=>x.kind==='concept').map(x=>x.result);
+              if(signal.aborted) throw new DOMException('Mapping collection canceled.','AbortError');
+              post({kind:'result',payload:{sectors,concepts}});
+            })().catch(error => {
+              const runId='{{{runId}}}';
+              chrome.webview.postMessage(JSON.stringify({
+                runId,
+                kind:'error',
+                error:error?.name==='AbortError'?'采集已取消':String(error)
+              }));
+            })
+            """;
+        MappingLogger.Info("EastMoney collection script execution started. TraceId={TraceId}", traceId);
+        var scriptResult = await _mappingWebView.ExecuteScriptAsync(script);
+        MappingLogger.Info(
+            "EastMoney collection script dispatched. TraceId={TraceId} ExecuteResultLength={ExecuteResultLength} ElapsedMs={ElapsedMs}",
+            traceId,
+            scriptResult?.Length ?? 0,
+            stopwatch.ElapsedMilliseconds);
+        using var collectionTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        collectionTimeout.CancelAfter(TimeSpan.FromMinutes(5));
+        using var registration = collectionTimeout.Token.Register(() =>
+        {
+            completion.TrySetCanceled(collectionTimeout.Token);
+            _ = Dispatcher.InvokeAsync(async () =>
+            {
+                if (_mappingWebView?.CoreWebView2 is not null)
+                {
+                    await _mappingWebView.ExecuteScriptAsync(
+                        $"if(window.__asrMappingRun?.runId==='{runId}')window.__asrMappingRun.controller.abort();");
+                }
+            });
+        });
+        string json;
+        try
+        {
+            json = await completion.Task;
+        }
+        finally
+        {
+            _mappingWebView.CoreWebView2.WebMessageReceived -= OnMessage;
+            if (string.Equals(_activeMappingRunId, runId, StringComparison.Ordinal))
+            {
+                _activeMappingRunId = null;
+            }
+        }
+        MappingLogger.Info("EastMoney collection JSON received. TraceId={TraceId} JsonLength={JsonLength} ElapsedMs={ElapsedMs}", traceId, json.Length, stopwatch.ElapsedMilliseconds);
+        using (var errorDocument = JsonDocument.Parse(json))
+        {
+            if (errorDocument.RootElement.TryGetProperty("error", out var error))
+            {
+                MappingLogger.Error("EastMoney collection script returned an error. TraceId={TraceId} Error={Error}", traceId, error.GetString());
+                throw new InvalidOperationException($"东方财富采集失败：{error.GetString()}");
+            }
+        }
+        var payload = JsonSerializer.Deserialize<MappingPayload>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        }) ?? throw new InvalidOperationException("东方财富没有返回映射数据。");
+        if (payload.Sectors.Count == 0 || payload.Concepts.Count == 0)
+        {
+            throw new InvalidOperationException("东方财富返回的行业或概念列表为空。");
+        }
+        MappingLogger.Info(
+            "WebView2 mapping collection completed. TraceId={TraceId} SectorBoards={SectorBoards} ConceptBoards={ConceptBoards} SectorMembers={SectorMembers} ConceptMembers={ConceptMembers} ElapsedMs={ElapsedMs}",
+            traceId,
+            payload.Sectors.Count,
+            payload.Concepts.Count,
+            payload.Sectors.Sum(board => board.Members.Count),
+            payload.Concepts.Sum(board => board.Members.Count),
+            stopwatch.ElapsedMilliseconds);
+        _activeMappingTraceId = null;
+        return payload;
+    }
+
+    private sealed record MappingPayload(List<MappingBoard> Sectors, List<MappingBoard> Concepts);
+    private sealed record MappingBoard(string Code, string Name, List<MappingMember> Members);
+    private sealed record MappingMember(string Symbol, string Name);
 
     private async void WatchButton_Click(object sender, RoutedEventArgs e)
     {
@@ -161,10 +507,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
@@ -178,10 +523,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
@@ -195,10 +539,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
@@ -212,10 +555,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
@@ -236,10 +578,9 @@ public partial class MainWindow : Window
         _showHistory = true;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
@@ -251,10 +592,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = true;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshPredictionReviewAsync();
     }
@@ -266,27 +606,25 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = true;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
 
-    private async void StrategyTrainingViewButton_Click(object sender, RoutedEventArgs e)
+    private async void LongTermTrackingViewButton_Click(object sender, RoutedEventArgs e)
     {
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = true;
+        _showLongTermTracking = true;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
-        await LoadStrategyTrainingOptionsAsync();
+        await RefreshLongTermTrackingAsync();
     }
 
     private void BacktestViewButton_Click(object sender, RoutedEventArgs e)
@@ -296,26 +634,10 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = true;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
-    }
-
-    private async void QlibStrategyViewButton_Click(object sender, RoutedEventArgs e)
-    {
-        _showResearchPage = true;
-        _showMarketSentiment = false;
-        _showHistory = false;
-        _showPredictionReview = false;
-        _showStrategyCenter = false;
-        _showStrategyTraining = false;
-        _showBacktest = false;
-        _showStockPools = false;
-        _showQlibStrategy = true;
-        ApplyWorkspaceVisibility();
-        await RefreshQlibStrategyAsync();
     }
 
     private async void StockPoolsViewButton_Click(object sender, RoutedEventArgs e)
@@ -325,10 +647,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = true;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshDailyHitsAsync();
     }
@@ -342,10 +663,9 @@ public partial class MainWindow : Window
         _showHistory = false;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
     }
@@ -379,10 +699,9 @@ public partial class MainWindow : Window
         _showHistory = true;
         _showPredictionReview = false;
         _showStrategyCenter = false;
-        _showStrategyTraining = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
-        _showQlibStrategy = false;
         ApplyWorkspaceVisibility();
         await RefreshAsync();
 
@@ -418,7 +737,7 @@ public partial class MainWindow : Window
             _showHistory = false;
             _showPredictionReview = false;
             _showStrategyCenter = false;
-            _showStrategyTraining = false;
+            _showLongTermTracking = false;
             _showBacktest = false;
             _showStockPools = false;
             ApplyWorkspaceVisibility();
@@ -470,6 +789,7 @@ public partial class MainWindow : Window
         _showHistory = true;
         _showPredictionReview = false;
         _showStrategyCenter = false;
+        _showLongTermTracking = false;
         _showBacktest = false;
         _showStockPools = false;
         ApplyWorkspaceVisibility();
@@ -481,11 +801,12 @@ public partial class MainWindow : Window
         await RunUiActionAsync(async token =>
         {
             UpdatePredictionDateFromPicker();
-            PredictionSummaryText.Text = "正在生成次日预测...";
-            PredictionWaitText.Text = "正在调用后端生成预测，请稍候...";
+            PredictionSummaryText.Text = "次日预测已提交后台任务...";
+            PredictionWaitText.Text = "任务运行完成后会自动刷新预测数据。";
             PredictionRecordListBox.ItemsSource = Array.Empty<PredictionRecordDisplay>();
-            var review = await _apiClient.GeneratePredictionReviewAsync(_predictionDate, token);
-            ApplyPredictionReview(review);
+            var response = await _apiClient.StartNextDayPredictionJobAsync(_predictionDate, token);
+            _latestBackgroundJobId = response?.JobId;
+            await RefreshBackgroundJobStatusAsync(token);
         });
     }
 
@@ -506,34 +827,56 @@ public partial class MainWindow : Window
         await RefreshPredictionReviewAsync();
     }
 
-    private async void RefreshQlibStrategyButton_Click(object sender, RoutedEventArgs e)
+    private async void BackgroundJobLogButton_Click(object sender, RoutedEventArgs e)
     {
-        await RefreshQlibStrategyAsync();
-    }
+        if (!_latestBackgroundJobId.HasValue)
+        {
+            FooterText.Text = "暂无后台任务日志。";
+            return;
+        }
 
-    private async void ImportQlibSeedsButton_Click(object sender, RoutedEventArgs e)
-    {
         await RunUiActionAsync(async token =>
         {
-            QlibStrategySummaryText.Text = "正在导入低位星火策略候选清单...";
-            var result = await _apiClient.ImportQlibR013SeedsAsync(token);
-            QlibStrategySummaryText.Text = result is null
-                ? "导入完成，但后端没有返回明细。"
-                : $"已导入 {result.ImportedCount} 条候选 | 信号日 {result.SignalDate:yyyy-MM-dd} | 来源实验 {result.SourceExperimentId}";
-            await RefreshQlibStrategyAsync(token);
+            var job = await _apiClient.GetJobAsync(_latestBackgroundJobId.Value, token);
+            var logs = await _apiClient.GetJobLogsAsync(_latestBackgroundJobId.Value, 500, token);
+            ShowBackgroundJobLogDialog(job, logs);
         });
     }
 
-    private async void QlibCandidateDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void RefreshLongTermTrackingButton_Click(object sender, RoutedEventArgs e)
     {
-        if (QlibCandidateDataGrid.SelectedItem is QlibCandidateDisplay item)
+        await RefreshLongTermTrackingAsync();
+    }
+
+    private async void BackfillLongTermTrackingButton_Click(object sender, RoutedEventArgs e)
+    {
+        var originalContent = BackfillLongTermTrackingButton.Content;
+        SetActionsEnabled(false);
+        BackfillLongTermTrackingButton.Content = "回填中";
+        try
         {
-            ApplyQlibCandidateDetail(item);
-            _selectedSymbol = item.Code;
-            _selectedName = item.Name;
-            ChartTitleText.Text = $"{item.Code} {item.Name} K线分析";
-            ChartCaptionText.Text = $"低位星火策略候选 | 排名 {item.ModelRank} | 实时状态：{item.RealtimeStateText}";
-            await RunUiActionAsync(async token => await RefreshKLineAsync(token));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            LongTermTrackingSummaryText.Text = "正在从历史信号回填长期跟踪...";
+            var result = await _apiClient.BackfillLongTermTrackingAsync(timeout.Token);
+            LongTermTrackingSummaryText.Text = result is null
+                ? "回填完成，但后端没有返回明细。"
+                : $"回填完成：跟踪 {result.ItemCount} 只/策略组合，来源事件 {result.EventCount} 条，时间 {FormatDateTime(result.BackfilledAt)}。";
+            await RefreshLongTermTrackingAsync(timeout.Token);
+        }
+        catch (TaskCanceledException)
+        {
+            LongTermTrackingSummaryText.Text = "历史回填请求超时，已停止前端等待；请稍后点击查询确认结果。";
+            FooterText.Text = "历史回填超过前端等待时间，按钮已恢复。";
+        }
+        catch (Exception ex)
+        {
+            LongTermTrackingSummaryText.Text = $"历史回填失败：{ex.Message}";
+            FooterText.Text = $"操作失败：{ex.Message}";
+        }
+        finally
+        {
+            BackfillLongTermTrackingButton.Content = originalContent;
+            SetActionsEnabled(true);
         }
     }
 
@@ -541,43 +884,27 @@ public partial class MainWindow : Window
     {
         await RefreshDailyHitsAsync();
     }
-    private async void DailyHitListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void DailyHitDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DailyHitListBox.SelectedItem is DailyHitDisplay item)
+        if (DailyHitDataGrid.SelectedItem is DailyHitDisplay item)
         {
             await SelectDailyHitAsync(item);
         }
     }
 
+    private void DailyHitFilterTextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyDailyHitFilters();
+    }
+
+    private void DailyHitFilterSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ApplyDailyHitFilters();
+    }
+
     private async void RunBacktestButton_Click(object sender, RoutedEventArgs e)
     {
         await RunBacktestAsync();
-    }
-
-    private async void BuildStrategyTrainingDatasetButton_Click(object sender, RoutedEventArgs e)
-    {
-        await BuildStrategyTrainingDatasetAsync();
-    }
-
-    private async void RunStrategyTrainingButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RunStrategyTrainingAsync();
-    }
-
-    private async void SaveStrategyParameterProfileButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { CommandParameter: StrategyTrainingResultDisplay result })
-        {
-            await SaveStrategyParameterProfileAsync(result, activate: false);
-        }
-    }
-
-    private async void ActivateStrategyParameterProfileButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { CommandParameter: StrategyTrainingResultDisplay result })
-        {
-            await SaveStrategyParameterProfileAsync(result, activate: true);
-        }
     }
 
     private void BacktestScale20Button_Click(object sender, RoutedEventArgs e)
@@ -690,72 +1017,167 @@ public partial class MainWindow : Window
                 cancellationToken);
             var opportunitiesTask = _apiClient.GetOpportunitiesAsync("All", cancellationToken);
             await Task.WhenAll(signalsTask, opportunitiesTask);
-            var manualStatusBySymbol = opportunitiesTask.Result
+            var opportunityBySymbol = opportunitiesTask.Result
                 .GroupBy(item => NormalizeHistorySymbol(item.Symbol), StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(
                     group => group.Key,
-                    group => BuildDailyHitReviewText(group.OrderByDescending(item => item.LastSeenTime).First()),
+                    group => group.OrderByDescending(item => item.LastSeenTime).First(),
                     StringComparer.OrdinalIgnoreCase);
             var dailyHits = signalsTask.Result
                 .GroupBy(item => NormalizeHistorySymbol(item.Symbol), StringComparer.OrdinalIgnoreCase)
                 .Select(group =>
                 {
-                    var ordered = group
+                    var byScore = group
                         .OrderByDescending(item => item.Score)
                         .ThenByDescending(item => item.EventTime)
                         .ToArray();
-                    var best = ordered[0];
-                    var strategyNames = ordered
+                    var latest = group.OrderByDescending(item => item.EventTime).First();
+                    var best = byScore[0];
+                    var strategyNames = group
                         .Select(item => item.StrategyName)
                         .Where(item => !string.IsNullOrWhiteSpace(item))
                         .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .Take(3)
                         .ToArray();
-                    manualStatusBySymbol.TryGetValue(NormalizeHistorySymbol(best.Symbol), out var manualStatus);
+                    opportunityBySymbol.TryGetValue(NormalizeHistorySymbol(best.Symbol), out var opportunity);
+                    var strategyCount = Math.Max(
+                        strategyNames.Length,
+                        group.Max(item => Math.Max(item.StrategyHitCount, 1)));
+                    var manualStatus = BuildDailyHitManualStatus(opportunity);
+                    var reviewText = opportunity is null
+                        ? "机会状态：未找到关联记录"
+                        : $"机会状态：{BuildDailyHitReviewText(opportunity)}";
 
                     return new DailyHitDisplay(
                         NormalizeHistorySymbol(best.Symbol),
                         best.Name,
-                        best.EventTime,
+                        latest.EventTime,
                         best.StrategyName,
+                        strategyNames,
+                        strategyCount,
+                        byScore.Length,
                         best.Score,
                         best.Price,
                         best.Reason,
                         best.Risk,
-                        $"强度 {best.Score:F2}",
+                        $"{best.Score:F2}",
+                        best.Price.HasValue ? best.Price.Value.ToString("F2") : "--",
+                        FormatTime(latest.EventTime),
+                        TranslateEventType(latest.EventType),
+                        manualStatus,
                         strategyNames.Length == 0 ? "命中策略：--" : $"命中策略：{string.Join(" / ", strategyNames)}",
-                        $"最近命中 {FormatTime(best.EventTime)} | 策略 {ordered.Length} 条 | 事件 {TranslateEventType(best.EventType)}",
-                        $"人工操作：{manualStatus ?? "未处理"}");
+                        $"最近命中 {FormatTime(latest.EventTime)} | 命中 {byScore.Length} 次 | 策略 {strategyCount} 个 | 事件 {TranslateEventType(latest.EventType)}",
+                        reviewText,
+                        $"{best.Symbol} {best.Name} · {best.StrategyName}",
+                        string.IsNullOrWhiteSpace(best.Risk) ? "暂无风险说明" : best.Risk);
                 })
                 .OrderByDescending(item => item.Score)
                 .ThenByDescending(item => item.EventTime)
                 .ToArray();
 
-            DailyHitListBox.ItemsSource = dailyHits;
+            _dailyHitItems = dailyHits;
             _dailyHitCount = dailyHits.Length;
+            PopulateDailyHitFilters(dailyHits);
+            ApplyDailyHitFilters();
             DailyHitSummaryText.Text = dailyHits.Length == 0
                 ? $"{tradingDate:yyyy-MM-dd} 当前日期暂无每日命中，可切换日期或等待扫描。"
-                : $"{tradingDate:yyyy-MM-dd} 命中股票 {dailyHits.Length} 只，点击左侧股票在右侧查看 K 线。";
+                : $"{tradingDate:yyyy-MM-dd} 命中股票 {dailyHits.Length} 只。可搜索、筛选或点击表头排序。";
             if (dailyHits.Length == 0)
             {
-                DailyHitListBox.SelectedItem = null;
+                DailyHitDataGrid.SelectedItem = null;
                 ClearDailyHitKLine();
             }
 
             ApplyWorkspaceVisibility();
-            if (dailyHits.Length > 0 && DailyHitListBox.SelectedItem is null)
+            if (dailyHits.Length > 0 && DailyHitDataGrid.SelectedItem is null)
             {
-                DailyHitListBox.SelectedItem = dailyHits[0];
+                DailyHitDataGrid.SelectedItem = dailyHits[0];
             }
         }
         catch (Exception ex)
         {
-            DailyHitListBox.ItemsSource = null;
+            _dailyHitItems = [];
+            DailyHitDataGrid.ItemsSource = null;
             _dailyHitCount = 0;
             ClearDailyHitKLine();
             DailyHitSummaryText.Text = $"每日命中加载失败：{ex.Message}";
             ApplyWorkspaceVisibility();
         }
+    }
+
+    private void PopulateDailyHitFilters(IReadOnlyList<DailyHitDisplay> items)
+    {
+        var selectedStrategy = DailyHitStrategyFilterComboBox.SelectedItem as string;
+        var selectedStatus = DailyHitStatusFilterComboBox.SelectedItem as string;
+        var strategies = items
+            .SelectMany(item => item.StrategyNames)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item, StringComparer.CurrentCulture)
+            .Prepend("全部策略")
+            .ToArray();
+        var statuses = items
+            .Select(item => item.ManualStatusText)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item, StringComparer.CurrentCulture)
+            .Prepend("全部状态")
+            .ToArray();
+
+        DailyHitStrategyFilterComboBox.ItemsSource = strategies;
+        DailyHitStrategyFilterComboBox.SelectedItem = strategies.Contains(selectedStrategy, StringComparer.OrdinalIgnoreCase)
+            ? selectedStrategy
+            : "全部策略";
+        DailyHitStatusFilterComboBox.ItemsSource = statuses;
+        DailyHitStatusFilterComboBox.SelectedItem = statuses.Contains(selectedStatus, StringComparer.OrdinalIgnoreCase)
+            ? selectedStatus
+            : "全部状态";
+    }
+
+    private void ApplyDailyHitFilters()
+    {
+        if (DailyHitDataGrid is null || DailyHitSearchBox is null || DailyHitStrategyFilterComboBox is null || DailyHitStatusFilterComboBox is null)
+        {
+            return;
+        }
+
+        var selectedSymbol = (DailyHitDataGrid.SelectedItem as DailyHitDisplay)?.Symbol;
+        var search = DailyHitSearchBox.Text.Trim();
+        var strategy = DailyHitStrategyFilterComboBox.SelectedItem as string;
+        var status = DailyHitStatusFilterComboBox.SelectedItem as string;
+        var filtered = _dailyHitItems
+            .Where(item => string.IsNullOrWhiteSpace(search)
+                || item.Symbol.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || item.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .Where(item => string.IsNullOrWhiteSpace(strategy)
+                || strategy == "全部策略"
+                || item.StrategyNames.Contains(strategy, StringComparer.OrdinalIgnoreCase))
+            .Where(item => string.IsNullOrWhiteSpace(status)
+                || status == "全部状态"
+                || string.Equals(item.ManualStatusText, status, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.Score)
+            .ThenByDescending(item => item.EventTime)
+            .ToArray();
+
+        DailyHitDataGrid.ItemsSource = filtered;
+        DailyHitDataGrid.SelectedItem = selectedSymbol is null
+            ? filtered.FirstOrDefault()
+            : filtered.FirstOrDefault(item => string.Equals(item.Symbol, selectedSymbol, StringComparison.OrdinalIgnoreCase))
+                ?? filtered.FirstOrDefault();
+
+        if (_dailyHitItems.Count > 0)
+        {
+            var tradingDate = DateOnly.FromDateTime(StockPoolHitDatePicker.SelectedDate ?? DateTime.Today);
+            DailyHitSummaryText.Text = $"{tradingDate:yyyy-MM-dd} 命中股票 {_dailyHitItems.Count} 只，当前显示 {filtered.Length} 只。";
+        }
+    }
+
+    private static string BuildDailyHitManualStatus(OpportunityDto? opportunity)
+    {
+        if (opportunity is null || string.IsNullOrWhiteSpace(opportunity.ManualTag))
+        {
+            return "未处理";
+        }
+
+        return TranslateManualTag(opportunity.ManualTag);
     }
 
     private static string BuildDailyHitReviewText(OpportunityDto opportunity)
@@ -770,23 +1192,13 @@ public partial class MainWindow : Window
             : $"{manual} / {status}{note}";
     }
 
-    private async Task SelectDailyHitAsync(DailyHitDisplay item)
+    private Task SelectDailyHitAsync(DailyHitDisplay item)
     {
         _selectedOpportunityId = null;
         _selectedSymbol = item.Symbol;
         _selectedName = item.Name;
-        SnapshotTitleText.Text = $"{item.Symbol} {item.Name}";
-        ChartTitleText.Text = $"{item.Symbol} {item.Name} K线复盘";
-        ChartCaptionText.Text = $"{item.StrategyText} | {item.SignalText} | {item.ReviewText}";
-        KLineChart.SymbolName = $"{item.Symbol} {item.Name}";
-        KLineChart.TradeMarkers = item.Price is { } price && price > 0
-            ? [new KLineTradeMarker(item.EventTime.LocalDateTime, price, "Buy", "信号")]
-            : [];
-        await RunUiActionAsync(async token => await RefreshKLineAsync(token));
-        KLineChart.TradeMarkers = item.Price is { } markerPrice && markerPrice > 0
-            ? [new KLineTradeMarker(item.EventTime.LocalDateTime, markerPrice, "Buy", "信号")]
-            : [];
-        FooterText.Text = $"已打开每日命中 K 线：{item.Symbol} {item.Name}，{item.StrategyName}，强度 {item.Score:F2}";
+        FooterText.Text = $"已选中每日命中：{item.Symbol} {item.Name}，{item.StrategyName}，强度 {item.Score:F2}";
+        return Task.CompletedTask;
     }
 
     private void ClearDailyHitKLine()
@@ -879,7 +1291,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (OpportunityListBox.SelectedItem is not OpportunityDisplay opportunity)
+        if (sender is not ListBox listBox || listBox.SelectedItem is not OpportunityDisplay opportunity)
         {
             ClearSnapshot();
             return;
@@ -895,7 +1307,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await ApplySnapshotAsync(detail, token);
+            await ApplySnapshotAsync(detail, token, refreshKLine: KLinePanel.Visibility == Visibility.Visible);
         });
     }
 
@@ -950,6 +1362,71 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OpenOpportunityKLineButton_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (sender is not FrameworkElement element)
+        {
+            return;
+        }
+
+        if (element.DataContext is DailyHitDisplay dailyHit)
+        {
+            await RunUiActionAsync(async token =>
+            {
+                EnsureFloatingKLineWindow();
+                _floatingKLineWindow!.Show();
+                if (_floatingKLineWindow.WindowState == WindowState.Minimized)
+                {
+                    _floatingKLineWindow.WindowState = WindowState.Normal;
+                }
+
+                _floatingKLineWindow.Activate();
+                await _floatingKLineWindow.LoadSymbolAsync(dailyHit.Symbol, dailyHit.Name, null, token);
+                FooterText.Text = $"已在独立窗口打开K线：{dailyHit.Symbol} {dailyHit.Name}";
+            });
+            return;
+        }
+
+        if (element.DataContext is not OpportunityDisplay opportunity)
+        {
+            return;
+        }
+
+        await RunUiActionAsync(async token =>
+        {
+            var detail = await _apiClient.GetOpportunityDetailAsync(opportunity.Id, token);
+            EnsureFloatingKLineWindow();
+            _floatingKLineWindow!.Show();
+            if (_floatingKLineWindow.WindowState == WindowState.Minimized)
+            {
+                _floatingKLineWindow.WindowState = WindowState.Normal;
+            }
+
+            _floatingKLineWindow.Activate();
+            await _floatingKLineWindow.LoadSymbolAsync(
+                opportunity.Symbol,
+                opportunity.Name,
+                detail?.LatestEvent,
+                token);
+            FooterText.Text = $"已在独立窗口打开K线：{opportunity.Symbol} {opportunity.Name}";
+        });
+    }
+
+    private void EnsureFloatingKLineWindow()
+    {
+        if (_floatingKLineWindow is { IsLoaded: true })
+        {
+            return;
+        }
+
+        _floatingKLineWindow = new KLineFloatingWindow(_apiClient)
+        {
+            Owner = this
+        };
+        _floatingKLineWindow.Closed += (_, _) => _floatingKLineWindow = null;
+    }
+
     private async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -957,7 +1434,8 @@ public partial class MainWindow : Window
             var statusTask = _apiClient.GetMonitorStatusAsync(cancellationToken);
             var marketDataStatusTask = _apiClient.GetMarketDataStatusAsync(cancellationToken);
             var historicalDataStatusTask = _apiClient.GetHistoricalDataUpdateStatusAsync(cancellationToken);
-            var marketMappingStatusTask = _apiClient.GetMarketMappingUpdateStatusAsync(cancellationToken);
+            var activeJobsTask = _apiClient.GetActiveJobsAsync(cancellationToken);
+            var latestJobTask = _apiClient.GetLatestJobAsync(null, cancellationToken);
             var marketSentimentTask = _apiClient.GetMarketSentimentAsync(cancellationToken);
             var marketSentimentDataSourcesTask = _showMarketSentiment
                 ? _apiClient.GetMarketSentimentDataSourcesAsync(cancellationToken)
@@ -972,11 +1450,11 @@ public partial class MainWindow : Window
             var eventsTask = !_showResearchPage && !_showMarketSentiment
                 ? _apiClient.GetSignalEventsAsync(cancellationToken)
                 : Task.FromResult<IReadOnlyList<SignalEventDto>>([]);
-            var sectorHeatTask = !_showResearchPage && _showSectorHeat
-                ? _apiClient.GetSectorHeatAsync(12, cancellationToken)
+            var sectorHeatTask = !_showResearchPage
+                ? _apiClient.GetSectorHeatAsync(5000, cancellationToken)
                 : Task.FromResult<IReadOnlyList<HeatBoardItemDto>>([]);
-            var conceptHeatTask = !_showResearchPage && _showConceptHeat
-                ? _apiClient.GetConceptHeatAsync(12, cancellationToken)
+            var conceptHeatTask = !_showResearchPage
+                ? _apiClient.GetConceptHeatAsync(5000, cancellationToken)
                 : Task.FromResult<IReadOnlyList<HeatBoardItemDto>>([]);
             var strategiesTask = _showStrategyCenter
                 ? _apiClient.GetStrategiesAsync(cancellationToken)
@@ -1010,7 +1488,8 @@ public partial class MainWindow : Window
                 sectorHeatTask,
                 conceptHeatTask,
                 historicalDataStatusTask,
-                marketMappingStatusTask,
+                activeJobsTask,
+                latestJobTask,
                 marketSentimentTask,
                 marketSentimentDataSourcesTask,
                 marketSentimentRegimesTask,
@@ -1023,7 +1502,7 @@ public partial class MainWindow : Window
 
             ApplyStatus(statusTask.Result, marketDataStatusTask.Result);
             ApplyHistoricalDataUpdateStatus(historicalDataStatusTask.Result);
-            ApplyMarketMappingUpdateStatus(marketMappingStatusTask.Result);
+            ApplyBackgroundJobs(activeJobsTask.Result, latestJobTask.Result);
             ApplyMarketSentiment(marketSentimentTask.Result);
             ApplyMarketSentimentPhaseTwo(
                 marketSentimentTask.Result,
@@ -1035,12 +1514,15 @@ public partial class MainWindow : Window
                 var opportunityDisplays = opportunitiesTask.Result
                     .Select(MapOpportunityDisplay)
                     .ToArray();
+                var realtimeDisplays = opportunityDisplays
+                    .Where(IsRealtimePoolOpportunity)
+                    .ToArray();
                 _isRefreshingOpportunityList = true;
                 try
                 {
-                    OpportunityListBox.ItemsSource = opportunityDisplays;
+                    OpportunityListBox.ItemsSource = realtimeDisplays;
                     OpportunityListBox.SelectedItem = selectedOpportunityId.HasValue
-                        ? opportunityDisplays.FirstOrDefault(item => item.Id == selectedOpportunityId.Value)
+                        ? realtimeDisplays.FirstOrDefault(item => item.Id == selectedOpportunityId.Value)
                         : null;
                 }
                 finally
@@ -1067,6 +1549,10 @@ public partial class MainWindow : Window
                 {
                     ApplyHeatBoard(conceptHeatTask.Result, ConceptHeatSummaryText, ConceptHeatItemsControl, "概念热度");
                 }
+
+                _mappingSectorHeatItems = sectorHeatTask.Result;
+                _mappingConceptHeatItems = conceptHeatTask.Result;
+                ApplyMappingHeatFilters();
             }
 
             if (_showHistory)
@@ -1091,16 +1577,19 @@ public partial class MainWindow : Window
         }
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
+            Logger.Warn(ex, "Desktop refresh timed out. SectorHeatVisible={SectorHeatVisible} ConceptHeatVisible={ConceptHeatVisible} ResearchVisible={ResearchVisible}", _showSectorHeat, _showConceptHeat, _showResearchPage);
             FooterText.Text = $"后端响应较慢：接口超过等待时间。服务仍可访问，请稍后刷新或减少同时打开的热度/复盘视图。{ex.Message}";
         }
         catch (Exception ex)
         {
+            Logger.Error(ex, "Desktop refresh failed. SectorHeatVisible={SectorHeatVisible} ConceptHeatVisible={ConceptHeatVisible} ResearchVisible={ResearchVisible}", _showSectorHeat, _showConceptHeat, _showResearchPage);
             FooterText.Text = $"后端不可用：{ex.Message}";
         }
     }
 
     private async Task StartRealtimeClientAsync()
     {
+        Logger.Info("Desktop realtime client starting.");
         try
         {
             _realtimeClient.MessageReceived += async (_, _) =>
@@ -1109,10 +1598,12 @@ public partial class MainWindow : Window
             };
 
             await _realtimeClient.StartAsync(CancellationToken.None);
+            Logger.Info("Desktop realtime client connected.");
             FooterText.Text = "实时推送已连接。";
         }
         catch (Exception ex)
         {
+            Logger.Error(ex, "Desktop realtime client unavailable; polling remains active.");
             FooterText.Text = $"实时推送不可用，已使用轮询刷新：{ex.Message}";
         }
     }
@@ -1149,13 +1640,13 @@ public partial class MainWindow : Window
     {
         if (status is null)
         {
-            StatusText.Text = "市场：--   监控：--   数据源：--   上次扫描：--   下次扫描：--";
-            SummaryText.Text = "活跃机会：--   今日新增：--   消失：--   重点跟踪：--";
+            StatusText.Text = "市场: --  |  监控: --  |  数据源: --  |  上次扫描: --  |  下次扫描: --";
+            SummaryText.Text = "活跃机会: --   今日新增: --   消失: --   重点跟踪: --";
             return;
         }
 
-        StatusText.Text = $"市场：{TranslateMarketStatus(status.MarketStatus)}   监控：{TranslateMonitorStatus(status.MonitorStatus)}   数据源：{BuildMarketDataLabel(marketDataStatus)}   上次扫描：{FormatTime(status.LastScanTime)}   下次扫描：{FormatTime(status.NextScanTime)}";
-        SummaryText.Text = $"活跃机会：{status.ActiveOpportunityCount}   今日新增：{status.TodayNewCount}   消失：{status.DisappearedCount}   重点跟踪：{status.FocusedCount}   历史策略：{TranslateMonitorStatus(status.HistoricalStrategyScanStatus)} {status.HistoricalStrategyScanSignalCount} 条 / {status.HistoricalStrategyScanSymbolCount} 只   上次：{FormatTime(status.LastHistoricalStrategyScanTime)}   下次：{FormatTime(status.NextHistoricalStrategyScanTime)}";
+        StatusText.Text = $"市场: {TranslateMarketStatus(status.MarketStatus)}  |  监控: {TranslateMonitorStatus(status.MonitorStatus)}  |  数据源: {BuildMarketDataLabel(marketDataStatus)}  |  上次扫描: {FormatTime(status.LastScanTime)}  |  下次扫描: {FormatTime(status.NextScanTime)}";
+        SummaryText.Text = $"活跃机会: {status.ActiveOpportunityCount}   今日新增: {status.TodayNewCount}   消失: {status.DisappearedCount}   重点跟踪: {status.FocusedCount}";
     }
 
     private void ApplyHistoricalDataUpdateStatus(HistoricalDataUpdateStatusDto? status)
@@ -1181,11 +1672,120 @@ public partial class MainWindow : Window
             : $"缺口：{string.Join(',', status.MissingTradingDates.Select(item => item.ToString("MM-dd")))}";
     }
 
+    private async Task RefreshBackgroundJobStatusAsync(CancellationToken cancellationToken = default)
+    {
+        var job = _latestBackgroundJobId.HasValue
+            ? await _apiClient.GetJobAsync(_latestBackgroundJobId.Value, cancellationToken)
+            : await _apiClient.GetLatestJobAsync(null, cancellationToken);
+        ApplyBackgroundJobs([], job);
+    }
+
+    private void ApplyBackgroundJobs(IReadOnlyList<BackgroundJobDto> activeJobs, BackgroundJobDto? latestJob)
+    {
+        var displayJob = activeJobs
+            .OrderByDescending(item => item.StartedAt ?? item.CreatedAt)
+            .FirstOrDefault()
+            ?? latestJob;
+        if (displayJob is null)
+        {
+            BackgroundJobStatusText.Text = string.Empty;
+            BackgroundJobStatusText.ToolTip = "后台任务：空闲";
+            BackgroundJobProgressBar.Value = 100;
+            BackgroundJobLogButton.IsEnabled = false;
+            return;
+        }
+
+        _latestBackgroundJobId = displayJob.Id;
+        BackgroundJobLogButton.IsEnabled = true;
+        BackgroundJobProgressBar.Value = displayJob.ProgressPercent;
+        var status = TranslateJobStatus(displayJob.Status);
+        BackgroundJobStatusText.Text = string.Empty;
+        BackgroundJobStatusText.ToolTip = $"后台任务：{displayJob.Title} | {status} {displayJob.ProgressPercent}% | {displayJob.CurrentStep}";
+
+        if (string.Equals(displayJob.Type, "next-day-prediction", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(displayJob.Status, "Succeeded", StringComparison.OrdinalIgnoreCase)
+            && _showPredictionReview
+            && _lastAutoRefreshedPredictionJobId != displayJob.Id)
+        {
+            _lastAutoRefreshedPredictionJobId = displayJob.Id;
+            _ = Dispatcher.InvokeAsync(async () => await RefreshPredictionReviewAsync());
+        }
+    }
+
+    private void ShowBackgroundJobLogDialog(BackgroundJobDto? job, IReadOnlyList<BackgroundJobLogDto> logs)
+    {
+        var builder = new StringBuilder();
+        if (job is not null)
+        {
+            builder.AppendLine($"{job.Title} | {TranslateJobStatus(job.Status)} | {job.ProgressPercent}%");
+            builder.AppendLine($"阶段：{job.CurrentStep}");
+            if (!string.IsNullOrWhiteSpace(job.ErrorMessage))
+            {
+                builder.AppendLine();
+                builder.AppendLine("错误：");
+                builder.AppendLine(job.ErrorMessage);
+            }
+
+            if (!string.IsNullOrWhiteSpace(job.FixSuggestion))
+            {
+                builder.AppendLine();
+                builder.AppendLine("修复建议：");
+                builder.AppendLine(job.FixSuggestion);
+            }
+
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("日志：");
+        foreach (var log in logs)
+        {
+            builder.AppendLine($"[{log.CreatedAt:HH:mm:ss}] {log.Stream}: {log.Message}");
+        }
+
+        var textBox = new TextBox
+        {
+            Text = builder.ToString(),
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            Padding = new Thickness(10)
+        };
+        var dialog = new Window
+        {
+            Title = "后台任务日志",
+            Owner = this,
+            Content = textBox,
+            Width = 860,
+            Height = 620,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        dialog.ShowDialog();
+    }
+
+    private static string TranslateJobStatus(string status)
+    {
+        return status switch
+        {
+            "Queued" => "排队中",
+            "Running" => "运行中",
+            "Succeeded" => "已完成",
+            "Failed" => "失败",
+            "Canceled" => "已取消",
+            _ => status
+        };
+    }
+
     private void ApplyMarketMappingUpdateStatus(MarketMappingUpdateStatusDto? status)
     {
         if (status is null)
         {
             MappingUpdateStatusText.Text = "概念行业：未检测";
+            MappingPageStateText.Visibility = Visibility.Collapsed;
+            MappingPageSummaryText.Text = "行业映射 -- | 概念映射 -- | 尚无更新时间";
+            MappingPageErrorText.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -1195,6 +1795,17 @@ public partial class MainWindow : Window
             : "--";
         MappingUpdateStatusText.Text =
             $"概念行业：{runState} | 行业 {status.SectorMappingCount} | 概念 {status.ConceptMappingCount} | 上次 {lastRun}";
+        MappingPageStateText.Text = status.IsRunning ? "更新中" : string.IsNullOrWhiteSpace(status.LastError) ? string.Empty : "更新失败";
+        MappingPageStateText.Visibility = status.IsRunning || !string.IsNullOrWhiteSpace(status.LastError)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        var updateTime = status.IsRunning ? status.LastStartedAt : status.LastFinishedAt;
+        MappingPageSummaryText.Text =
+            $"行业映射 {status.SectorMappingCount:N0} | 概念映射 {status.ConceptMappingCount:N0} | 更新时间 {updateTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "--"}";
+        MappingPageErrorText.Text = status.LastError ?? string.Empty;
+        MappingPageErrorText.Visibility = string.IsNullOrWhiteSpace(status.LastError)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private void ApplyMarketSentiment(MarketSentimentSnapshotDto? sentiment)
@@ -1490,13 +2101,35 @@ public partial class MainWindow : Window
         string title)
     {
         summaryText.Text = $"{title} {items.Count} 个 | 最近刷新 {DateTime.Now:HH:mm:ss}";
-        itemsControl.ItemsSource = items
+        itemsControl.ItemsSource = BuildHeatBoardDisplays(items);
+    }
+
+    private static HeatBoardDisplay[] BuildHeatBoardDisplays(IReadOnlyList<HeatBoardItemDto> items)
+    {
+        return items
             .Select(item => new HeatBoardDisplay(
                 item.Name,
                 $"热度 {item.HeatScore:F1}",
                 $"均涨 {item.AverageChangePercent:F2}%   上涨 {item.RisingCount}/{item.StockCount}   成交额 {item.TotalAmount / 100_000_000m:F1} 亿",
                 BuildHeatLeaderText(item.Leaders)))
             .ToArray();
+    }
+
+    private void MappingHeatSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ApplyMappingHeatFilters();
+    }
+
+    private void ApplyMappingHeatFilters()
+    {
+        var sectorQuery = MappingSectorSearchBox?.Text?.Trim() ?? string.Empty;
+        var conceptQuery = MappingConceptSearchBox?.Text?.Trim() ?? string.Empty;
+        MappingSectorHeatItemsControl.ItemsSource = BuildHeatBoardDisplays(_mappingSectorHeatItems
+            .Where(item => string.IsNullOrWhiteSpace(sectorQuery) || item.Name.Contains(sectorQuery, StringComparison.OrdinalIgnoreCase))
+            .ToArray());
+        MappingConceptHeatItemsControl.ItemsSource = BuildHeatBoardDisplays(_mappingConceptHeatItems
+            .Where(item => string.IsNullOrWhiteSpace(conceptQuery) || item.Name.Contains(conceptQuery, StringComparison.OrdinalIgnoreCase))
+            .ToArray());
     }
 
     private void ApplyHistoryStats(
@@ -1689,525 +2322,6 @@ public partial class MainWindow : Window
             .ToArray();
     }
 
-    private async Task BuildStrategyTrainingDatasetAsync()
-    {
-        var request = BuildStrategyTrainingDatasetRequest();
-        await RunUiActionAsync(async token =>
-        {
-            StrategyTrainingSummaryText.Text = request.ForceRebuild
-                ? "正在强制重新生成训练样本，长日期区间可能需要数分钟..."
-                : "正在生成训练样本...";
-            StrategyTrainingResultListBox.ItemsSource = null;
-            StrategyTrainingSampleListBox.ItemsSource = null;
-            var dataset = await _apiClient.BuildStrategyTrainingDatasetAsync(request, token);
-            ApplyStrategyTrainingDataset(dataset);
-        }, GetStrategyTrainingTimeout(request));
-    }
-
-    private async Task RunStrategyTrainingAsync()
-    {
-        var request = BuildStrategyTrainingRunRequest();
-        await RunUiActionAsync(async token =>
-        {
-            StrategyTrainingSummaryText.Text = request.ForceRebuild
-                ? "正在强制重新生成样本并运行参数网格训练，长日期区间可能需要数分钟..."
-                : "正在运行参数网格训练...";
-            StrategyTrainingResultListBox.ItemsSource = null;
-            var run = await _apiClient.RunStrategyTrainingAsync(request, token);
-            ApplyStrategyTrainingRun(run);
-        }, GetStrategyTrainingTimeout(request));
-    }
-
-    private static TimeSpan GetStrategyTrainingTimeout(StrategyTrainingDatasetRequest request)
-    {
-        return GetStrategyTrainingTimeout(request.StartDate, request.EndDate, request.ForceRebuild);
-    }
-
-    private static TimeSpan GetStrategyTrainingTimeout(StrategyTrainingRunRequest request)
-    {
-        return GetStrategyTrainingTimeout(request.StartDate, request.EndDate, request.ForceRebuild);
-    }
-
-    private static TimeSpan GetStrategyTrainingTimeout(DateOnly startDate, DateOnly endDate, bool forceRebuild)
-    {
-        var daySpan = endDate.DayNumber - startDate.DayNumber;
-        return forceRebuild
-            ? TimeSpan.FromMinutes(daySpan > 370 ? 15 : 5)
-            : TimeSpan.FromMinutes(3);
-    }
-
-    private async Task SaveStrategyParameterProfileAsync(StrategyTrainingResultDisplay result, bool activate)
-    {
-        if (!result.CanApply || string.IsNullOrWhiteSpace(result.StrategyCode))
-        {
-            MessageBox.Show("请先选择单个策略运行训练，再保存或应用参数方案。", "策略参数", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        await RunUiActionAsync(async token =>
-        {
-            var profileName = $"{result.StrategyCode} Top{result.Rank} {DateTime.Now:MMdd-HHmm}";
-            var profile = await _apiClient.SaveStrategyParameterProfileAsync(
-                new SaveStrategyParameterProfileRequest(
-                    result.StrategyCode,
-                    profileName,
-                    result.RunId,
-                    result.MinScore,
-                    result.MinAmountYi,
-                    result.MinRelativeStrengthPercent,
-                    result.MinHeatScore,
-                    result.MaxOutputPerDay,
-                    result.SampleCount,
-                    result.SuccessRate,
-                    result.AverageNextHighReturn,
-                    result.AverageNextCloseReturn),
-                token);
-
-            if (activate && profile is not null)
-            {
-                profile = await _apiClient.ActivateStrategyParameterProfileAsync(profile.Id, token);
-            }
-
-            StrategyTrainingSummaryText.Text = activate
-                ? $"已应用参数方案：{profile?.ProfileName ?? profileName}。实时扫描、历史扫描和回放将读取这组参数。"
-                : $"已保存参数方案：{profile?.ProfileName ?? profileName}。点击“应用”后才会影响策略运行。";
-        });
-    }
-
-    private async Task LoadStrategyTrainingOptionsAsync()
-    {
-        await RunUiActionAsync(async token =>
-        {
-            var selectedCode = StrategyTrainingStrategyComboBox.SelectedValue as string;
-            var strategies = await _apiClient.GetStrategiesAsync(token);
-            var options = new List<StrategyTrainingOptionDisplay>
-            {
-                new(null, "全部策略")
-            };
-            options.AddRange(strategies
-                .OrderBy(item => item.Name)
-                .Select(item => new StrategyTrainingOptionDisplay(item.Code, $"{item.Name} ({item.Code})")));
-
-            StrategyTrainingStrategyComboBox.ItemsSource = options;
-            var selected = options.FindIndex(item => string.Equals(item.Code, selectedCode, StringComparison.OrdinalIgnoreCase));
-            StrategyTrainingStrategyComboBox.SelectedIndex = selected >= 0
-                ? selected
-                : Math.Max(0, options.FindIndex(item => string.Equals(item.Code, "main-sector-resonance", StringComparison.OrdinalIgnoreCase)));
-        });
-    }
-
-    private StrategyTrainingDatasetRequest BuildStrategyTrainingDatasetRequest()
-    {
-        var startDate = StrategyTrainingStartDatePicker.SelectedDate.HasValue
-            ? DateOnly.FromDateTime(StrategyTrainingStartDatePicker.SelectedDate.Value)
-            : DateOnly.FromDateTime(DateTime.Today.AddDays(-60));
-        var endDate = StrategyTrainingEndDatePicker.SelectedDate.HasValue
-            ? DateOnly.FromDateTime(StrategyTrainingEndDatePicker.SelectedDate.Value)
-            : DateOnly.FromDateTime(DateTime.Today);
-        var strategyCode = StrategyTrainingStrategyComboBox.SelectedValue as string;
-        strategyCode = string.IsNullOrWhiteSpace(strategyCode)
-            ? null
-            : strategyCode.Trim();
-        var highReturn = decimal.TryParse(StrategyTrainingHighReturnTextBox.Text, out var parsedHighReturn)
-            ? parsedHighReturn
-            : 2m;
-
-        return new StrategyTrainingDatasetRequest(
-            startDate,
-            endDate,
-            strategyCode,
-            highReturn,
-            StrategyTrainingPositiveCloseCheckBox.IsChecked == true,
-            StrategyTrainingForceRebuildCheckBox.IsChecked == true,
-            ParseDecimalGrid(StrategyTrainingScoreThresholdsTextBox.Text),
-            ParseDecimalGrid(StrategyTrainingAmountThresholdsTextBox.Text),
-            ParseDecimalGrid(StrategyTrainingRelativeStrengthThresholdsTextBox.Text),
-            ParseDecimalGrid(StrategyTrainingHeatThresholdsTextBox.Text),
-            ParseIntGrid(StrategyTrainingOutputLimitsTextBox.Text));
-    }
-
-    private StrategyTrainingRunRequest BuildStrategyTrainingRunRequest()
-    {
-        var datasetRequest = BuildStrategyTrainingDatasetRequest();
-        return new StrategyTrainingRunRequest(
-            datasetRequest.StartDate,
-            datasetRequest.EndDate,
-            datasetRequest.StrategyCode,
-            datasetRequest.SuccessHighReturnThreshold,
-            datasetRequest.RequirePositiveClose,
-            datasetRequest.ForceRebuild,
-            datasetRequest.ScoreThresholds,
-            datasetRequest.AmountThresholds,
-            datasetRequest.RelativeStrengthThresholds,
-            datasetRequest.HeatThresholds,
-            datasetRequest.OutputLimits);
-    }
-
-    private static decimal[]? ParseDecimalGrid(string? value)
-    {
-        var items = (value ?? string.Empty)
-            .Split([',', '，', ';', '；', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(item => decimal.TryParse(item, out var parsed) ? parsed : (decimal?)null)
-            .Where(item => item.HasValue)
-            .Select(item => item!.Value)
-            .Distinct()
-            .ToArray();
-        return items.Length == 0 ? null : items;
-    }
-
-    private static int[]? ParseIntGrid(string? value)
-    {
-        var items = (value ?? string.Empty)
-            .Split([',', '，', ';', '；', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(item => int.TryParse(item, out var parsed) ? parsed : (int?)null)
-            .Where(item => item.HasValue)
-            .Select(item => item!.Value)
-            .Distinct()
-            .ToArray();
-        return items.Length == 0 ? null : items;
-    }
-
-    private void ApplyStrategyTrainingDataset(StrategyTrainingDatasetDto? dataset)
-    {
-        if (dataset is null)
-        {
-            StrategyTrainingSummaryText.Text = "暂无训练样本结果";
-            StrategyTrainingSampleListBox.ItemsSource = null;
-            return;
-        }
-
-        StrategyTrainingSummaryText.Text =
-            $"区间 {dataset.StartDate:yyyy-MM-dd} 至 {dataset.EndDate:yyyy-MM-dd} | 原始信号 {dataset.SourceSignalCount} 条 | 样本 {dataset.SampleCount} 条 | 成功 {dataset.SuccessCount} 条 | 成功率 {FormatPercent(dataset.SuccessRate)} | {dataset.Message}";
-        StrategyTrainingResultTitleText.Text = "样本总结";
-        StrategyTrainingResultListBox.ItemsSource = BuildStrategyTrainingDatasetSummary(dataset);
-        StrategyTrainingSampleListBox.ItemsSource = dataset.Samples
-            .Take(80)
-            .Select(item => new StrategyTrainingSampleDisplay(
-                item.SignalDate.ToString("yyyy-MM-dd"),
-                item.Symbol,
-                item.Name,
-                $"{item.StrategyName}  分数 {item.Score:F2}",
-                $"5日：首开 {FormatPercent(item.NextOpenReturn)} / 最高 {FormatPercent(item.NextHighReturn)} / 收 {FormatPercent(item.NextCloseReturn)}",
-                BuildStrategyTrainingFactorText(item),
-                item.IsSuccess ? "成功" : "未达标",
-                item.IsSuccess ? Brushes.ForestGreen : Brushes.Gray))
-            .ToArray();
-    }
-
-    private void ApplyStrategyTrainingRun(StrategyTrainingRunDto? run)
-    {
-        if (run is null)
-        {
-            StrategyTrainingSummaryText.Text = "暂无训练结果";
-            StrategyTrainingResultListBox.ItemsSource = null;
-            return;
-        }
-
-        StrategyTrainingSummaryText.Text =
-            $"区间 {run.StartDate:yyyy-MM-dd} 至 {run.EndDate:yyyy-MM-dd} | 样本 {run.SampleCount} 条 | 参数组合 {run.ResultCount} 组 | {run.Message}";
-        StrategyTrainingResultTitleText.Text = "最优参数";
-        StrategyTrainingResultListBox.ItemsSource = run.Results
-            .Select(item => new StrategyTrainingResultDisplay(
-                item.Rank,
-                $"命中 {item.HitCount} / 成功 {item.SuccessCount}",
-                FormatPercent(item.SuccessRate),
-                item.SuccessRate.GetValueOrDefault() >= 60m ? Brushes.ForestGreen : Brushes.DarkOrange,
-                $"分数>={item.MinScore:F0} | 成交额>={item.MinAmountYi:F0}亿 | 相对强度>={item.MinRelativeStrengthPercent:F0}% | 热度>={item.MinHeatScore:F0} | 每日Top {item.MaxOutputPerDay}",
-                $"5日：首开 {FormatPercent(item.AverageNextOpenReturn)} / 最高 {FormatPercent(item.AverageNextHighReturn)} / 收 {FormatPercent(item.AverageNextCloseReturn)} | 最差收 {FormatPercent(item.WorstNextCloseReturn)}",
-                item.Summary,
-                CanApply: !string.IsNullOrWhiteSpace(run.StrategyCode),
-                StrategyCode: run.StrategyCode,
-                RunId: run.RunId,
-                MinScore: item.MinScore,
-                MinAmountYi: item.MinAmountYi,
-                MinRelativeStrengthPercent: item.MinRelativeStrengthPercent,
-                MinHeatScore: item.MinHeatScore,
-                MaxOutputPerDay: item.MaxOutputPerDay,
-                SampleCount: item.HitCount,
-                SuccessRate: item.SuccessRate,
-                AverageNextHighReturn: item.AverageNextHighReturn,
-                AverageNextCloseReturn: item.AverageNextCloseReturn))
-            .ToArray();
-    }
-
-    private static IReadOnlyList<StrategyTrainingResultDisplay> BuildStrategyTrainingDatasetSummary(StrategyTrainingDatasetDto dataset)
-    {
-        var summaries = new List<StrategyTrainingResultDisplay>();
-        if (dataset.Samples.Count == 0)
-        {
-            summaries.Add(new StrategyTrainingResultDisplay(
-                1,
-                "样本 0 / 成功 0",
-                "--",
-                Brushes.Gray,
-                "当前区间没有可验证训练样本",
-                "请确认历史信号或历史日线覆盖到下一交易日。",
-                dataset.Message));
-            return summaries;
-        }
-
-        summaries.Add(new StrategyTrainingResultDisplay(
-            1,
-            $"样本 {dataset.SampleCount} / 成功 {dataset.SuccessCount}",
-            FormatPercent(dataset.SuccessRate),
-            dataset.SuccessRate.GetValueOrDefault() >= 50m ? Brushes.ForestGreen : Brushes.DarkOrange,
-            BuildTrainingDateSpanText(dataset.Samples),
-            BuildTrainingReturnSummary(dataset.Samples),
-            "整体样本统计：用于判断当前成功标准下，这个策略是否具备继续调参价值。"));
-
-        summaries.AddRange(dataset.Samples
-            .GroupBy(item => new { item.StrategyCode, item.StrategyName })
-            .OrderByDescending(group => group.Count())
-            .Take(8)
-            .Select((group, index) =>
-            {
-                var items = group.ToArray();
-                var successCount = items.Count(item => item.IsSuccess);
-                var successRate = Rate(successCount, items.Length);
-                return new StrategyTrainingResultDisplay(
-                    index + 2,
-                    $"{group.Key.StrategyName}  样本 {items.Length} / 成功 {successCount}",
-                    FormatPercent(successRate),
-                    successRate.GetValueOrDefault() >= 50m ? Brushes.ForestGreen : Brushes.DarkOrange,
-                    group.Key.StrategyCode,
-                    BuildTrainingReturnSummary(items),
-                    $"平均分 {items.Average(item => item.Score):F2} | 最高分 {items.Max(item => item.Score):F2}");
-            }));
-
-        return summaries;
-    }
-
-    private static string BuildTrainingDateSpanText(IReadOnlyList<StrategyTrainingSampleDto> samples)
-    {
-        var minDate = samples.Min(item => item.SignalDate);
-        var maxDate = samples.Max(item => item.SignalDate);
-        return $"样本日期 {minDate:yyyy-MM-dd} 至 {maxDate:yyyy-MM-dd}";
-    }
-
-    private static string BuildTrainingReturnSummary(IReadOnlyList<StrategyTrainingSampleDto> samples)
-    {
-        return $"5日均值：首开 {FormatPercent(AverageNullable(samples.Select(item => item.NextOpenReturn)))} / 最高 {FormatPercent(AverageNullable(samples.Select(item => item.NextHighReturn)))} / 收 {FormatPercent(AverageNullable(samples.Select(item => item.NextCloseReturn)))}";
-    }
-
-    private static string BuildStrategyTrainingFactorText(StrategyTrainingSampleDto item)
-    {
-        var metrics = item.Metrics?
-            .Where(metric => !metric.Key.StartsWith("market_sentiment_", StringComparison.OrdinalIgnoreCase))
-            .ToDictionary(metric => metric.Key, metric => metric.Value, StringComparer.OrdinalIgnoreCase);
-        if (metrics is { Count: > 0 })
-        {
-            var preferredKeys = item.StrategyCode switch
-            {
-                "strong-repair-rebound" => new[]
-                {
-                    "repair_from_low_percent",
-                    "intraday_drawdown_percent",
-                    "price_above_ma20_percent",
-                    "close_position_percent",
-                    "volume_ratio",
-                    "upper_shadow_percent"
-                },
-                "main-sector-resonance" => new[]
-                {
-                    "amount",
-                    "relative_strength_percent",
-                    "sector_heat_score",
-                    "concept_heat_score",
-                    "sector_rising_ratio"
-                },
-                "platform-volume-breakout" => new[]
-                {
-                    "amount",
-                    "breakout_percent",
-                    "platform_range_percent",
-                    "volume_ratio",
-                    "relative_strength_percent"
-                },
-                "counter-trend-strength" => new[]
-                {
-                    "relative_strength_percent",
-                    "market_average_change",
-                    "volume_ratio",
-                    "price_above_ma20_percent"
-                },
-                _ => Array.Empty<string>()
-            };
-
-            var selected = preferredKeys
-                .Where(metrics.ContainsKey)
-                .Select(key => new KeyValuePair<string, decimal>(key, metrics[key]))
-                .Concat(metrics
-                    .Where(metric => !preferredKeys.Contains(metric.Key, StringComparer.OrdinalIgnoreCase))
-                    .OrderBy(metric => metric.Key))
-                .Take(5)
-                .Select(metric => $"{TranslateMetricName(metric.Key)} {FormatMetricValue(metric.Value)}")
-                .ToArray();
-            if (selected.Length > 0)
-            {
-                return string.Join(" | ", selected);
-            }
-        }
-
-        var heatScore = item.SectorHeatScore.HasValue || item.ConceptHeatScore.HasValue
-            ? $"{Math.Max(item.SectorHeatScore ?? 0m, item.ConceptHeatScore ?? 0m):F1}"
-            : "--";
-        return $"成交额 {FormatAmountYi(item.AmountYi)} | 相对强度 {FormatPercent(item.RelativeStrengthPercent)} | 热度 {heatScore}";
-    }
-
-    private async Task RefreshQlibStrategyAsync(CancellationToken cancellationToken = default)
-    {
-        await RunUiActionAsync(async token =>
-        {
-            var activeToken = cancellationToken == default ? token : cancellationToken;
-            QlibStrategySummaryText.Text = "正在读取低位星火策略数据...";
-            var statusTask = _apiClient.GetQlibR013SignalStatusAsync(activeToken);
-            var seedsTask = _apiClient.GetQlibR013SeedsAsync(null, 200, activeToken);
-            var opportunitiesTask = _apiClient.GetOpportunitiesAsync("Current", activeToken);
-            var latestTask = _apiClient.GetQlibR013LatestAsync(activeToken);
-            var rebalanceTask = _apiClient.GetQlibR013RebalancePlanAsync(activeToken);
-
-            await Task.WhenAll(statusTask, seedsTask, opportunitiesTask, latestTask, rebalanceTask);
-
-            ApplyQlibStrategyPage(
-                statusTask.Result,
-                seedsTask.Result,
-                opportunitiesTask.Result,
-                latestTask.Result,
-                rebalanceTask.Result);
-        });
-    }
-
-    private void ApplyQlibStrategyPage(
-        QlibSignalStatusDto? status,
-        IReadOnlyList<QlibSignalSeedDto> seeds,
-        IReadOnlyList<OpportunityDto> opportunities,
-        QlibSignalSnapshotDto? latest,
-        QlibSignalSnapshotDto? rebalancePlan)
-    {
-        var opportunitiesBySymbol = opportunities
-            .GroupBy(item => NormalizeSymbolKey(item.Symbol), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.CurrentScore).First(), StringComparer.OrdinalIgnoreCase);
-
-        var latestSignalDate = seeds.Count > 0
-            ? seeds.Max(item => item.SignalDate)
-            : latest?.SignalDate ?? status?.SignalDate;
-        var latestSeeds = latestSignalDate.HasValue
-            ? seeds.Where(item => item.SignalDate == latestSignalDate.Value).OrderBy(item => item.ModelRank).ToArray()
-            : seeds.OrderBy(item => item.ModelRank).ToArray();
-        var displays = latestSeeds
-            .Select(item =>
-            {
-                opportunitiesBySymbol.TryGetValue(NormalizeSymbolKey(item.Code), out var opportunity);
-                var actionText = TranslateQlibAction(item.Action);
-                return new QlibCandidateDisplay(
-                    item.Code,
-                    item.Symbol,
-                    item.Name,
-                    item.SignalDate,
-                    item.ModelRank,
-                    $"Top {item.ModelRank}",
-                    item.ModelScore100,
-                    item.ModelScore100.ToString("F2"),
-                    actionText,
-                    GetQlibActionBrush(actionText),
-                    $"{item.TargetWeight:P2}",
-                    opportunity is null ? "未触发" : TranslateOpportunityStatus(opportunity.Status),
-                    opportunity is null ? "--" : opportunity.CurrentScore.ToString("F2"),
-                    string.IsNullOrWhiteSpace(item.Risk) ? "--" : item.Risk!,
-                    item.SourceExperimentId,
-                    item.Reason,
-                    opportunity?.StrategySummary ?? "--",
-                    opportunity?.StrategyExplanation ?? "--",
-                    opportunity?.LastSeenTime,
-                    item.ImportedAt);
-            })
-            .ToArray();
-
-        var confirmedCount = displays.Count(item => item.RealtimeStateText is "候选" or "重点" or "加强" or "新命中");
-        QlibSignalDateText.Text = latestSignalDate.HasValue ? latestSignalDate.Value.ToString("yyyy-MM-dd") : "--";
-        QlibSeedCountText.Text = displays.Length.ToString();
-        QlibConfirmedCountText.Text = confirmedCount.ToString();
-        QlibImportedAtText.Text = displays.Length == 0 ? "--" : displays.Max(item => item.ImportedAt).ToLocalTime().ToString("HH:mm:ss");
-        QlibCandidateHintText.Text = status is null
-            ? "无法读取 Qlib 状态，请确认后端已启动。"
-            : status.FileExists
-                ? $"共享文件存在，文件记录 {status.RecordCount} 条，最后写入 {FormatDateTime(status.LastWriteTime)}。"
-                : $"共享文件缺失：{status.WatchlistPath}";
-        QlibStrategySummaryText.Text = displays.Length == 0
-            ? "尚未导入候选种子。点击“导入候选”后，会把 latest_watchlist.csv 写入 qlib_signal_seeds。"
-            : $"候选 {displays.Length} 只 | 实时确认 {confirmedCount} 只 | 来源实验 {displays[0].SourceExperimentId}";
-        QlibCandidateDataGrid.ItemsSource = displays;
-        ApplyQlibRebalancePlan(rebalancePlan);
-        if (displays.Length > 0 && QlibCandidateDataGrid.SelectedItem is null)
-        {
-            QlibCandidateDataGrid.SelectedIndex = 0;
-        }
-        else if (displays.Length == 0)
-        {
-            ApplyQlibCandidateDetail(null);
-        }
-    }
-
-    private void ApplyQlibRebalancePlan(QlibSignalSnapshotDto? rebalancePlan)
-    {
-        var records = rebalancePlan?.Records ?? Array.Empty<QlibSignalRecordDto>();
-        var displays = records
-            .OrderBy(item => QlibActionOrder(item.Action))
-            .ThenBy(item => item.ModelRank)
-            .Select(item =>
-            {
-                var actionText = TranslateQlibAction(item.Action);
-                return new QlibRebalanceDisplay(
-                    item.Code,
-                    item.Symbol,
-                    item.Name,
-                    item.SignalDate,
-                    item.ModelRank,
-                    item.ModelRank > 0 ? $"Top {item.ModelRank}" : "--",
-                    item.ModelScore100.ToString("F2"),
-                    actionText,
-                    GetQlibActionBrush(actionText),
-                    $"{item.TargetWeight:P2}",
-                    string.IsNullOrWhiteSpace(item.Risk) ? "--" : item.Risk!,
-                    item.Reason);
-            })
-            .ToArray();
-
-        QlibRebalancePlanDataGrid.ItemsSource = displays;
-        var signalDateText = rebalancePlan is null ? "--" : rebalancePlan.SignalDate.ToString("yyyy-MM-dd");
-        if (displays.Length == 0)
-        {
-            QlibRebalanceSummaryText.Text = $"信号日 {signalDateText} | 无调仓记录";
-            return;
-        }
-
-        var buyCount = displays.Count(item => item.ActionText == "买入");
-        var sellCount = displays.Count(item => item.ActionText == "卖出");
-        var holdCount = displays.Count(item => item.ActionText == "继续持有");
-        QlibRebalanceSummaryText.Text = $"信号日 {signalDateText} | 买入 {buyCount} | 卖出 {sellCount} | 继续持有 {holdCount}";
-    }
-
-    private void ApplyQlibCandidateDetail(QlibCandidateDisplay? item)
-    {
-        if (item is null)
-        {
-            QlibDetailTitleText.Text = "未选择股票";
-            QlibDetailStateText.Text = "从左侧选择一只候选股。";
-            QlibDetailSignalText.Text = "--";
-            QlibDetailRealtimeText.Text = "--";
-            QlibDetailReasonText.Text = "--";
-            return;
-        }
-
-        QlibDetailTitleText.Text = $"{item.Code} {item.Name}";
-        QlibDetailStateText.Text = $"实时状态：{item.RealtimeStateText} | 机会分：{item.OpportunityScoreText}";
-        QlibDetailSignalText.Text = $"信号日 {item.SignalDate:yyyy-MM-dd} | 排名 Top {item.ModelRank} | 模型分 {item.ScoreText} | 目标权重 {item.WeightText} | 来源实验 {item.SourceExperimentId}";
-        QlibDetailRealtimeText.Text = item.LastSeenTime.HasValue
-            ? $"最近实时命中：{FormatDateTime(item.LastSeenTime)} | {item.OpportunitySummary}`n{item.OpportunityExplanation}"
-            : "当前机会池尚未触发。需要等待盘中成交额、涨跌幅、量比等条件确认。";
-        QlibDetailReasonText.Text = $"Qlib 理由：{item.Reason}`n风险：{item.RiskText}";
-    }
-
     private async Task RefreshPredictionReviewAsync()
     {
         await RunUiActionAsync(async token =>
@@ -2218,6 +2332,133 @@ public partial class MainWindow : Window
             var review = await _apiClient.GetPredictionReviewAsync(_predictionDate, token);
             ApplyPredictionReview(review);
         });
+    }
+
+    private async Task RefreshLongTermTrackingAsync(CancellationToken cancellationToken = default)
+    {
+        await RunUiActionAsync(async token =>
+        {
+            var activeToken = cancellationToken == default ? token : cancellationToken;
+            LongTermTrackingSummaryText.Text = "正在读取长期跟踪数据...";
+            var result = await _apiClient.GetLongTermTrackingAsync(
+                LongTermTrackingFromDatePicker.SelectedDate.HasValue
+                    ? DateOnly.FromDateTime(LongTermTrackingFromDatePicker.SelectedDate.Value)
+                    : null,
+                LongTermTrackingToDatePicker.SelectedDate.HasValue
+                    ? DateOnly.FromDateTime(LongTermTrackingToDatePicker.SelectedDate.Value)
+                    : null,
+                string.IsNullOrWhiteSpace(LongTermTrackingSymbolTextBox.Text)
+                    ? null
+                    : NormalizeHistorySymbol(LongTermTrackingSymbolTextBox.Text),
+                string.IsNullOrWhiteSpace(LongTermTrackingStrategyCodeTextBox.Text)
+                    ? null
+                    : LongTermTrackingStrategyCodeTextBox.Text.Trim(),
+                GetComboBoxTag(LongTermTrackingStatusComboBox),
+                GetComboBoxTag(LongTermTrackingSortComboBox) ?? "LastHitAt",
+                descending: true,
+                count: 1000,
+                activeToken);
+            ApplyLongTermTracking(result);
+        });
+    }
+
+    private void ApplyLongTermTracking(LongTermTrackingQueryResultDto? result)
+    {
+        if (result is null)
+        {
+            LongTermTrackingSummaryText.Text = "暂无长期跟踪数据。";
+            LongTermTrackingDataGrid.ItemsSource = null;
+            return;
+        }
+
+        LongTermTrackingSummaryText.Text = result.TotalCount == 0
+            ? "暂无标的 / 策略组合"
+            : $"{result.TotalCount} 个标的 / 策略组合";
+        LongTermTrackingDataGrid.ItemsSource = result.Items
+            .Select(item => new LongTermTrackingDisplay(
+                item.Id,
+                item.Symbol,
+                item.Name,
+                item.StrategyCode,
+                item.StrategyName,
+                FormatNullableDecimal(item.CurrentPrice),
+                FormatPercent(item.ReturnFromHit),
+                GetAshareReturnBrush(item.ReturnFromHit),
+                $"最新分 {item.LatestScore:F1} / 最高分 {item.BestScore:F1}",
+                item.HitCount.ToString(),
+                BuildLongTermHitRangeText(item.FirstHitAt, item.LastHitAt),
+                BuildLongTermTrackingTags(item),
+                item.LatestRisk ?? "--"))
+            .ToArray();
+    }
+
+    private static string BuildLongTermHitRangeText(DateTimeOffset firstHitAt, DateTimeOffset lastHitAt)
+    {
+        return $"{firstHitAt.ToLocalTime():MM-dd HH:mm} ~ {lastHitAt.ToLocalTime():MM-dd HH:mm}";
+    }
+
+    private static IReadOnlyList<LongTermTrackingTagDisplay> BuildLongTermTrackingTags(LongTermTrackingItemDto item)
+    {
+        var tags = new List<LongTermTrackingTagDisplay>();
+        var risk = item.LatestRisk ?? string.Empty;
+        if (!risk.Contains("仍明显低于MA20", StringComparison.OrdinalIgnoreCase)
+            && !risk.Contains("低于MA20", StringComparison.OrdinalIgnoreCase))
+        {
+            tags.Add(LongTermTrackingTagDisplay.Positive("修复中"));
+        }
+
+        if (risk.Contains("低于MA20", StringComparison.OrdinalIgnoreCase))
+        {
+            tags.Add(LongTermTrackingTagDisplay.Warning("低于MA20"));
+        }
+
+        if (risk.Contains("承接", StringComparison.OrdinalIgnoreCase)
+            || risk.Contains("下影", StringComparison.OrdinalIgnoreCase))
+        {
+            tags.Add(LongTermTrackingTagDisplay.Danger("承接弱"));
+        }
+
+        if (risk.Contains("情绪偏热", StringComparison.OrdinalIgnoreCase)
+            || risk.Contains("拥挤", StringComparison.OrdinalIgnoreCase))
+        {
+            tags.Add(LongTermTrackingTagDisplay.Warning("情绪偏热"));
+        }
+
+        if (item.StrategyName.Contains("主线", StringComparison.OrdinalIgnoreCase)
+            || item.LatestReason.Contains("主线", StringComparison.OrdinalIgnoreCase))
+        {
+            tags.Add(LongTermTrackingTagDisplay.Info("主线信号"));
+        }
+
+        if (tags.Count == 0)
+        {
+            tags.Add(LongTermTrackingTagDisplay.Info(TranslateLongTermStatus(item.Status)));
+        }
+
+        return tags.Take(5).ToArray();
+    }
+
+    private static string? GetComboBoxTag(ComboBox comboBox)
+    {
+        return comboBox.SelectedItem is ComboBoxItem { Tag: string tag } && !string.IsNullOrWhiteSpace(tag)
+            ? tag
+            : null;
+    }
+
+    private static string TranslateLongTermStatus(string status)
+    {
+        return status switch
+        {
+            "Focus" => "重点",
+            "GiveUp" => "放弃",
+            "Archived" => "归档",
+            _ => "观察"
+        };
+    }
+
+    private static string FormatNullableDecimal(decimal? value)
+    {
+        return value.HasValue ? value.Value.ToString("F2") : "--";
     }
 
     private void UpdatePredictionDateFromPicker()
@@ -2251,7 +2492,18 @@ public partial class MainWindow : Window
                 BuildPredictionVerifyText(item),
                 item.PredictionReason,
                 IsQlibNextDayPrediction(item) ? qlibPredictionBrush : (Brush)FindResource("SubtleTextBrush"),
-                item.RiskNote))
+                item.RiskNote,
+                $"{item.PredictionScore:F2}",
+                BuildPrimaryStrategyText(item.StrategyNames),
+                $"{item.SignalCount}次",
+                $"{item.StrategyHitCount}次",
+                BuildPredictionUpProbabilityText(item),
+                BuildPredictionDownProbabilityText(item),
+                CalculatePredictionUpProbabilityWidth(item),
+                BuildPredictionConfidenceText(item),
+                BuildPredictionExtraTagText(item),
+                string.IsNullOrWhiteSpace(BuildPredictionExtraTagText(item)) ? Visibility.Collapsed : Visibility.Visible,
+                BuildPredictionVerifyBadgeText(item)))
             .ToArray();
         PredictionRecordListBox.ItemsSource = records;
         PredictionRecordListBox.SelectedIndex = records.Length > 0 ? 0 : -1;
@@ -2270,6 +2522,82 @@ public partial class MainWindow : Window
         return $"验证：{item.VerifyStatus} | 验证日 {item.VerifyDate:yyyy-MM-dd} | 开盘 {FormatPercent(item.NextOpenReturn)} | 收盘 {FormatPercent(item.NextCloseReturn)} | 最高 {FormatPercent(item.NextHighReturn)} | 最低 {FormatPercent(item.NextLowReturn)}";
     }
 
+    private static string BuildPrimaryStrategyText(string strategyNames)
+    {
+        var first = strategyNames
+            .Split(['|', ',', '，', '、'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        return string.IsNullOrWhiteSpace(first) ? "策略命中" : first;
+    }
+
+    private static string BuildPredictionUpProbabilityText(PredictionRecordDto item)
+    {
+        return $"上涨 {ExtractPredictionProbability(item.PredictionReason, "上涨概率", item.PredictionScore):F2}%";
+    }
+
+    private static string BuildPredictionDownProbabilityText(PredictionRecordDto item)
+    {
+        var fallback = Math.Clamp(100m - item.PredictionScore, 0m, 100m);
+        return $"下跌 {ExtractPredictionProbability(item.PredictionReason, "下跌概率", fallback):F2}%";
+    }
+
+    private static double CalculatePredictionUpProbabilityWidth(PredictionRecordDto item)
+    {
+        var up = ExtractPredictionProbability(item.PredictionReason, "上涨概率", item.PredictionScore);
+        return (double)Math.Clamp(up, 0m, 100m) / 100d * 274d;
+    }
+
+    private static decimal ExtractPredictionProbability(string text, string label, decimal fallback)
+    {
+        var match = Regex.Match(text, label + @"\s*([0-9]+(?:\.[0-9]+)?)%");
+        return match.Success && decimal.TryParse(match.Groups[1].Value, out var value)
+            ? value
+            : fallback;
+    }
+
+    private static string BuildPredictionConfidenceText(PredictionRecordDto item)
+    {
+        if (item.RiskNote.Contains("置信度低", StringComparison.OrdinalIgnoreCase)
+            || item.PredictionReason.Contains("置信度 低", StringComparison.OrdinalIgnoreCase))
+        {
+            return "置信度低 · 单一策略命中";
+        }
+
+        if (item.PredictionReason.Contains("置信度 高", StringComparison.OrdinalIgnoreCase))
+        {
+            return "置信度高";
+        }
+
+        return item.StrategyHitCount > 1 ? "多策略命中" : "单一策略命中";
+    }
+
+    private static string BuildPredictionExtraTagText(PredictionRecordDto item)
+    {
+        if (item.RiskNote.Contains("盘中出现加强", StringComparison.OrdinalIgnoreCase)
+            || item.PredictionReason.Contains("盘中出现加强", StringComparison.OrdinalIgnoreCase))
+        {
+            return "盘中加强";
+        }
+
+        if (item.PredictionReason.Contains("重新命中", StringComparison.OrdinalIgnoreCase))
+        {
+            return "重新命中";
+        }
+
+        return string.Empty;
+    }
+
+    private static string BuildPredictionVerifyBadgeText(PredictionRecordDto item)
+    {
+        return item.VerifyStatus switch
+        {
+            "成功" => "已成功",
+            "失败" => "失败",
+            "待验证" => "待验证",
+            _ => item.VerifyStatus
+        };
+    }
+
     private static bool IsQlibNextDayPrediction(PredictionRecordDto item)
     {
         return item.PredictionReason.Contains("Qlib 明日预测", StringComparison.OrdinalIgnoreCase)
@@ -2280,13 +2608,14 @@ public partial class MainWindow : Window
     {
         _showMarketSentiment = false;
         var isDailyHitResearchView = _showResearchPage && _showStockPools;
-        var isQlibResearchView = _showResearchPage && _showQlibStrategy;
-        var showDailyHitKLine = isDailyHitResearchView && _dailyHitCount > 0;
-        var isFullWorkspaceView = _showResearchPage && !isDailyHitResearchView && !isQlibResearchView;
+        var isRealtimeObservationView = !_showResearchPage && !_showMarketSentiment;
+        var showDailyHitKLine = false;
+        var isFullWorkspaceView = _showResearchPage && !isDailyHitResearchView;
         WorkspaceContentGrid.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star);
         WorkspaceContentGrid.RowDefinitions[1].Height = new GridLength(0);
         Grid.SetRow(WorkspaceListHost, 0);
         Grid.SetColumn(WorkspaceListHost, 0);
+        Grid.SetColumnSpan(WorkspacePanel, isRealtimeObservationView ? 2 : 1);
         Grid.SetRow(KLinePanel, 0);
         Grid.SetColumn(KLinePanel, 2);
         SignalEventListBox.Visibility = Visibility.Collapsed;
@@ -2296,19 +2625,19 @@ public partial class MainWindow : Window
         HistoryStatsPanel.Visibility = _showHistory ? Visibility.Visible : Visibility.Collapsed;
         PredictionReviewPanel.Visibility = _showPredictionReview ? Visibility.Visible : Visibility.Collapsed;
         StrategyCenterPanel.Visibility = _showStrategyCenter ? Visibility.Visible : Visibility.Collapsed;
-        StrategyTrainingPanel.Visibility = _showStrategyTraining ? Visibility.Visible : Visibility.Collapsed;
+        LongTermTrackingPanel.Visibility = _showLongTermTracking ? Visibility.Visible : Visibility.Collapsed;
         BacktestPanel.Visibility = _showBacktest ? Visibility.Visible : Visibility.Collapsed;
         StockPoolsPanel.Visibility = _showStockPools ? Visibility.Visible : Visibility.Collapsed;
-        QlibStrategyPanel.Visibility = isQlibResearchView ? Visibility.Visible : Visibility.Collapsed;
 
         OpportunityPanel.Visibility = _showResearchPage ? Visibility.Collapsed : Visibility.Visible;
-        SnapshotPanel.Visibility = _showResearchPage ? Visibility.Collapsed : Visibility.Visible;
+        SnapshotPanel.Visibility = _showResearchPage || isRealtimeObservationView ? Visibility.Collapsed : Visibility.Visible;
         WorkspaceListHost.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
-        KLinePanel.Visibility = isFullWorkspaceView || isQlibResearchView || (isDailyHitResearchView && !showDailyHitKLine)
+        ObservationPoolPanel.Visibility = isRealtimeObservationView ? Visibility.Visible : Visibility.Collapsed;
+        KLinePanel.Visibility = isRealtimeObservationView || isFullWorkspaceView || (isDailyHitResearchView && !showDailyHitKLine)
             ? Visibility.Collapsed
             : Visibility.Visible;
-        OpportunityColumn.Width = _showResearchPage ? new GridLength(0) : new GridLength(300);
-        SnapshotColumn.Width = _showResearchPage ? new GridLength(0) : new GridLength(320);
+        OpportunityColumn.Width = _showResearchPage ? new GridLength(0) : new GridLength(430);
+        SnapshotColumn.Width = _showResearchPage || isRealtimeObservationView ? new GridLength(0) : new GridLength(320);
         WorkspaceListColumn.Width = _showResearchPage
             ? showDailyHitKLine ? new GridLength(300) : new GridLength(1, GridUnitType.Star)
             : new GridLength(0);
@@ -2318,21 +2647,20 @@ public partial class MainWindow : Window
         WorkspaceKLineColumn.Width = _showResearchPage
             ? showDailyHitKLine ? new GridLength(1, GridUnitType.Star) : new GridLength(0)
             : new GridLength(1, GridUnitType.Star);
-        WorkspacePanel.Margin = _showResearchPage ? new Thickness(0) : new Thickness(14, 0, 14, 0);
+        WorkspacePanel.Margin = _showResearchPage ? new Thickness(0) : new Thickness(14, 0, 0, 0);
         WorkspaceTitleText.Text = _showResearchPage ? "研究复盘" : "实时工作台";
         WorkspaceCaptionText.Text = _showResearchPage
-            ? "历史统计、次日预测和策略中心已集中到研究页。"
-            : "机会池与行情快照保持在左侧，K 线区域独立显示。";
+            ? "历史统计、次日预测、长期跟踪和策略中心已集中到研究页。"
+            : "左侧显示实时策略机会，右侧显示概念与行业映射更新结果。";
         SignalStreamViewButton.Visibility = Visibility.Collapsed;
         SectorHeatViewButton.Visibility = Visibility.Collapsed;
         ConceptHeatViewButton.Visibility = Visibility.Collapsed;
         MarketSentimentViewButton.Visibility = Visibility.Collapsed;
         HistoryStatsViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         PredictionReviewViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
+        LongTermTrackingViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         StrategyCenterViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
-        StrategyTrainingViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         BacktestViewButton.Visibility = Visibility.Collapsed;
-        QlibStrategyViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         StockPoolsViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
 
         RealtimePageButton.Style = _showResearchPage
@@ -2360,16 +2688,13 @@ public partial class MainWindow : Window
         PredictionReviewViewButton.Style = _showPredictionReview
             ? (Style)FindResource("PrimaryButtonStyle")
             : (Style)FindResource("PageTabButtonStyle");
+        LongTermTrackingViewButton.Style = _showLongTermTracking
+            ? (Style)FindResource("PrimaryButtonStyle")
+            : (Style)FindResource("PageTabButtonStyle");
         StrategyCenterViewButton.Style = _showStrategyCenter
             ? (Style)FindResource("PrimaryButtonStyle")
             : (Style)FindResource("PageTabButtonStyle");
-        StrategyTrainingViewButton.Style = _showStrategyTraining
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
         BacktestViewButton.Style = _showBacktest
-            ? (Style)FindResource("PrimaryButtonStyle")
-            : (Style)FindResource("PageTabButtonStyle");
-        QlibStrategyViewButton.Style = _showQlibStrategy
             ? (Style)FindResource("PrimaryButtonStyle")
             : (Style)FindResource("PageTabButtonStyle");
         StockPoolsViewButton.Style = _showStockPools
@@ -2481,7 +2806,7 @@ public partial class MainWindow : Window
                 DecisionNoteTextBox.Text,
                 token);
             _opportunityView = "Current";
-            OpportunityFilterText.Text = "仅显示系统当前命中的股票；人工判断在右侧个股快照处理。";
+            OpportunityFilterText.Text = "主线板块共振 / 主线低开高走 · 按综合分排序";
             await RefreshAsync(token);
             FooterText.Text = $"已保存人工判断：{TranslateManualTag(decisionType)}";
         });
@@ -2528,7 +2853,9 @@ public partial class MainWindow : Window
                 item.High,
                 item.Low,
                 item.Close,
-                item.Volume))
+                item.Volume,
+                item.Amount,
+                item.TurnoverRate))
             .ToArray();
         await RefreshIndicatorAsync(cancellationToken);
     }
@@ -2669,6 +2996,25 @@ public partial class MainWindow : Window
             item.StrategyExplanation);
     }
 
+    private static bool IsRealtimePoolOpportunity(OpportunityDisplay item)
+    {
+        return ContainsRealtimePoolStrategy(item.StrategySummary)
+            || ContainsRealtimePoolStrategy(item.StrategyExplanation);
+    }
+
+    private static bool ContainsRealtimePoolStrategy(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return value.Contains("主线板块共振", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("主线低开高走", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("main-sector-resonance", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("main-sector-gap-recovery", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string TranslateOpportunityStatus(string? value)
     {
         return value switch
@@ -2762,20 +3108,29 @@ public partial class MainWindow : Window
         };
     }
 
-    private async Task RunUiActionAsync(Func<CancellationToken, Task> action, TimeSpan? timeoutOverride = null)
+    private async Task RunUiActionAsync(
+        Func<CancellationToken, Task> action,
+        TimeSpan? timeoutOverride = null,
+        [CallerMemberName] string operation = "Unknown")
     {
+        var timeoutValue = timeoutOverride ?? TimeSpan.FromSeconds(150);
+        var stopwatch = Stopwatch.StartNew();
+        Logger.Info("UI action started. Operation={Operation} TimeoutSeconds={TimeoutSeconds}", operation, timeoutValue.TotalSeconds);
         SetActionsEnabled(false);
         try
         {
-            using var timeout = new CancellationTokenSource(timeoutOverride ?? TimeSpan.FromSeconds(150));
+            using var timeout = new CancellationTokenSource(timeoutValue);
             await action(timeout.Token);
+            Logger.Info("UI action completed. Operation={Operation} ElapsedMs={ElapsedMs}", operation, stopwatch.ElapsedMilliseconds);
         }
-        catch (TaskCanceledException)
+        catch (TaskCanceledException ex)
         {
+            Logger.Warn(ex, "UI action timed out or was canceled. Operation={Operation} ElapsedMs={ElapsedMs}", operation, stopwatch.ElapsedMilliseconds);
             FooterText.Text = "操作仍在等待后端响应，已超过前端等待时间。请稍后刷新查看结果。";
         }
         catch (Exception ex)
         {
+            Logger.Error(ex, "UI action failed. Operation={Operation} ElapsedMs={ElapsedMs}", operation, stopwatch.ElapsedMilliseconds);
             FooterText.Text = $"操作失败：{ex.Message}";
         }
         finally
@@ -2787,9 +3142,6 @@ public partial class MainWindow : Window
     private void SetActionsEnabled(bool enabled)
     {
         Cursor = enabled ? Cursors.Arrow : Cursors.Wait;
-        StartButton.IsEnabled = enabled;
-        PauseButton.IsEnabled = enabled;
-        ScanOnceButton.IsEnabled = enabled;
         UpdateHistoryDataButton.IsEnabled = enabled;
         UpdateMarketMappingButton.IsEnabled = enabled;
         WatchButton.IsEnabled = enabled;
@@ -2802,8 +3154,8 @@ public partial class MainWindow : Window
         MarketSentimentViewButton.IsEnabled = enabled;
         HistoryStatsViewButton.IsEnabled = enabled;
         PredictionReviewViewButton.IsEnabled = enabled;
+        LongTermTrackingViewButton.IsEnabled = enabled;
         StrategyCenterViewButton.IsEnabled = enabled;
-        StrategyTrainingViewButton.IsEnabled = enabled;
         BacktestViewButton.IsEnabled = enabled;
         StockPoolsViewButton.IsEnabled = enabled;
         RealtimePageButton.IsEnabled = enabled;
@@ -2824,19 +3176,14 @@ public partial class MainWindow : Window
         BacktestPositive5DayCheckBox.IsEnabled = enabled;
         BacktestStockPoolComboBox.IsEnabled = enabled;
         BacktestMaxSymbolsTextBox.IsEnabled = enabled;
-        BuildStrategyTrainingDatasetButton.IsEnabled = enabled;
-        RunStrategyTrainingButton.IsEnabled = enabled;
-        StrategyTrainingStartDatePicker.IsEnabled = enabled;
-        StrategyTrainingEndDatePicker.IsEnabled = enabled;
-        StrategyTrainingStrategyComboBox.IsEnabled = enabled;
-        StrategyTrainingHighReturnTextBox.IsEnabled = enabled;
-        StrategyTrainingPositiveCloseCheckBox.IsEnabled = enabled;
-        StrategyTrainingForceRebuildCheckBox.IsEnabled = enabled;
-        StrategyTrainingScoreThresholdsTextBox.IsEnabled = enabled;
-        StrategyTrainingAmountThresholdsTextBox.IsEnabled = enabled;
-        StrategyTrainingRelativeStrengthThresholdsTextBox.IsEnabled = enabled;
-        StrategyTrainingHeatThresholdsTextBox.IsEnabled = enabled;
-        StrategyTrainingOutputLimitsTextBox.IsEnabled = enabled;
+        RefreshLongTermTrackingButton.IsEnabled = enabled;
+        BackfillLongTermTrackingButton.IsEnabled = enabled;
+        LongTermTrackingFromDatePicker.IsEnabled = enabled;
+        LongTermTrackingToDatePicker.IsEnabled = enabled;
+        LongTermTrackingSymbolTextBox.IsEnabled = enabled;
+        LongTermTrackingStrategyCodeTextBox.IsEnabled = enabled;
+        LongTermTrackingStatusComboBox.IsEnabled = enabled;
+        LongTermTrackingSortComboBox.IsEnabled = enabled;
         RefreshDailyHitsButton.IsEnabled = enabled;
         StockPoolHitDatePicker.IsEnabled = enabled;
         MinutePeriodButton.IsEnabled = enabled;
@@ -2958,6 +3305,16 @@ public partial class MainWindow : Window
         }
 
         return value.Value > 0m ? Brushes.ForestGreen : value.Value < 0m ? Brushes.Firebrick : Brushes.DarkOrange;
+    }
+
+    private static Brush GetAshareReturnBrush(decimal? value)
+    {
+        if (!value.HasValue)
+        {
+            return Brushes.Gray;
+        }
+
+        return value.Value > 0m ? Brushes.Firebrick : value.Value < 0m ? Brushes.ForestGreen : Brushes.DarkOrange;
     }
 
     private static string BuildTagsText(IReadOnlyList<string>? tags)
@@ -3254,55 +3611,6 @@ public partial class MainWindow : Window
         return dotIndex > 0 ? text[..dotIndex] : text;
     }
 
-    private static string TranslateQlibAction(string value)
-    {
-        return value switch
-        {
-            "Confirm" => "确认",
-            "Candidate" => "候选",
-            "Watch" => "观察",
-            "Buy" => "买入",
-            "Sell" => "卖出",
-            "Hold" => "继续持有",
-            "Target" => "目标持仓",
-            _ => value
-        };
-    }
-
-    private static int QlibActionOrder(string value)
-    {
-        return TranslateQlibAction(value) switch
-        {
-            "卖出" => 0,
-            "买入" => 1,
-            "继续持有" => 2,
-            "目标持仓" => 3,
-            "确认" => 4,
-            "候选" => 5,
-            "观察" => 6,
-            "弱市空仓" => 7,
-            _ => 9
-        };
-    }
-
-    private static Brush GetQlibActionBrush(string value)
-    {
-        return value switch
-        {
-            "买入" => Brushes.Firebrick,
-            "卖出" => Brushes.ForestGreen,
-            "继续持有" => Brushes.SteelBlue,
-            "目标持仓" => Brushes.SteelBlue,
-            "弱市空仓" => Brushes.Gray,
-            "确认" => Brushes.Firebrick,
-            "候选" => Brushes.DarkOrange,
-            "观察" => Brushes.DimGray,
-            "等回踩" => Brushes.SteelBlue,
-            "排除" => Brushes.Gray,
-            _ => Brushes.DimGray
-        };
-    }
-
     private static string TranslateParameterName(string key)
     {
         return key switch
@@ -3402,7 +3710,51 @@ public partial class MainWindow : Window
         string VerifyText,
         string ReasonText,
         Brush ReasonBrush,
-        string RiskText);
+        string RiskText,
+        string ScoreBadgeText,
+        string MainStrategyText,
+        string SignalCountText,
+        string StrategyHitCountText,
+        string UpProbabilityText,
+        string DownProbabilityText,
+        double UpProbabilityWidth,
+        string ConfidenceText,
+        string ExtraTagText,
+        Visibility ExtraTagVisibility,
+        string VerifyBadgeText);
+
+    private sealed record LongTermTrackingDisplay(
+        Guid Id,
+        string Symbol,
+        string Name,
+        string StrategyCode,
+        string StrategyName,
+        string CurrentPriceText,
+        string ReturnFromHitText,
+        Brush ReturnFromHitBrush,
+        string ScoreText,
+        string HitCountText,
+        string HitRangeText,
+        IReadOnlyList<LongTermTrackingTagDisplay> StatusTags,
+        string Risk);
+
+    private sealed record LongTermTrackingTagDisplay(
+        string Text,
+        Brush Foreground,
+        Brush Background)
+    {
+        public static LongTermTrackingTagDisplay Positive(string text) =>
+            new(text, new SolidColorBrush(Color.FromRgb(22, 137, 85)), new SolidColorBrush(Color.FromRgb(228, 248, 237)));
+
+        public static LongTermTrackingTagDisplay Warning(string text) =>
+            new(text, new SolidColorBrush(Color.FromRgb(190, 111, 20)), new SolidColorBrush(Color.FromRgb(255, 242, 222)));
+
+        public static LongTermTrackingTagDisplay Danger(string text) =>
+            new(text, new SolidColorBrush(Color.FromRgb(209, 78, 78)), new SolidColorBrush(Color.FromRgb(255, 232, 232)));
+
+        public static LongTermTrackingTagDisplay Info(string text) =>
+            new(text, new SolidColorBrush(Color.FromRgb(47, 112, 220)), new SolidColorBrush(Color.FromRgb(232, 241, 255)));
+    }
 
     private sealed record BacktestSignalDisplay(
         string TradingDate,
@@ -3441,90 +3793,28 @@ public partial class MainWindow : Window
         Brush WinRateBrush,
         Brush ReturnBrush);
 
-    private sealed record StrategyTrainingResultDisplay(
-        int Rank,
-        string HitText,
-        string SuccessRateText,
-        Brush SuccessRateBrush,
-        string ParameterText,
-        string ReturnText,
-        string Summary,
-        bool CanApply = false,
-        string? StrategyCode = null,
-        Guid? RunId = null,
-        decimal MinScore = 0m,
-        decimal MinAmountYi = 0m,
-        decimal MinRelativeStrengthPercent = 0m,
-        decimal MinHeatScore = 0m,
-        int MaxOutputPerDay = 0,
-        int SampleCount = 0,
-        decimal? SuccessRate = null,
-        decimal? AverageNextHighReturn = null,
-        decimal? AverageNextCloseReturn = null);
-
-    private sealed record StrategyTrainingOptionDisplay(
-        string? Code,
-        string Label);
-
-    private sealed record StrategyTrainingSampleDisplay(
-        string SignalDate,
-        string Symbol,
-        string Name,
-        string StrategyText,
-        string ReturnText,
-        string FactorText,
-        string ResultText,
-        Brush ResultBrush);
-
-    private sealed record QlibCandidateDisplay(
-        string Code,
-        string Symbol,
-        string Name,
-        DateOnly SignalDate,
-        int ModelRank,
-        string RankText,
-        decimal ModelScore,
-        string ScoreText,
-        string ActionText,
-        Brush ActionBrush,
-        string WeightText,
-        string RealtimeStateText,
-        string OpportunityScoreText,
-        string RiskText,
-        string SourceExperimentId,
-        string Reason,
-        string OpportunitySummary,
-        string OpportunityExplanation,
-        DateTimeOffset? LastSeenTime,
-        DateTimeOffset ImportedAt);
-
-    private sealed record QlibRebalanceDisplay(
-        string Code,
-        string Symbol,
-        string Name,
-        DateOnly SignalDate,
-        int ModelRank,
-        string RankText,
-        string ScoreText,
-        string ActionText,
-        Brush ActionBrush,
-        string WeightText,
-        string RiskText,
-        string Reason);
-
     private sealed record DailyHitDisplay(
         string Symbol,
         string Name,
         DateTimeOffset EventTime,
         string StrategyName,
+        IReadOnlyList<string> StrategyNames,
+        int StrategyCount,
+        int HitCount,
         decimal Score,
         decimal? Price,
         string Reason,
         string? Risk,
         string ScoreText,
+        string PriceText,
+        string LatestHitTimeText,
+        string EventTypeText,
+        string ManualStatusText,
         string StrategyText,
         string SignalText,
-        string ReviewText);
+        string ReviewText,
+        string DetailTitle,
+        string RiskText);
 
     private sealed record StrategyPerformanceDisplay(
         string StrategyName,

@@ -194,7 +194,8 @@ public sealed class EastMoneyQuantDotNetClient
                     (decimal)item.high,
                     (decimal)item.low,
                     (decimal)item.close,
-                    (decimal)item.volume);
+                    (decimal)item.volume,
+                    (decimal)item.amount);
             })
             .Where(item => item.Close > 0)
             .OrderBy(item => item.TradingTime)

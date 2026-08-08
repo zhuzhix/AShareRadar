@@ -12,6 +12,7 @@ public sealed record StrategyContext(
     IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>? DailyBarsBySymbol = null,
     IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>? WeeklyBarsBySymbol = null,
     IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>? MinuteBarsBySymbol = null,
+    IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>? ThirtyMinuteBarsBySymbol = null,
     SectorHeatSnapshot? SectorHeatSnapshot = null,
     ConceptHeatSnapshot? ConceptHeatSnapshot = null,
     MarketSentimentSnapshot? MarketSentiment = null,

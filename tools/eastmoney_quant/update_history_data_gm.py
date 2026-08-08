@@ -19,6 +19,10 @@ if SHARED_PACKAGES.exists():
 import duckdb
 import pandas as pd
 from gm.api import get_instruments, history, set_token
+try:
+    from gm.api import stk_get_daily_basic
+except ImportError:  # pragma: no cover - depends on installed SDK version.
+    stk_get_daily_basic = None
 from gm.enum import ADJUST_PREV
 
 
@@ -38,6 +42,10 @@ class Paths:
     @property
     def daily_dir(self) -> Path:
         return self.parquet / "daily_bars"
+
+    @property
+    def daily_basic_dir(self) -> Path:
+        return self.parquet / "daily_basic"
 
     @property
     def universe_path(self) -> Path:
@@ -92,6 +100,10 @@ def to_gm_symbol(code: str) -> str:
 
 def stock_output_path(paths: Paths, code: str) -> Path:
     return paths.daily_dir / f"{code.replace('.', '_')}.parquet"
+
+
+def daily_basic_output_path(paths: Paths, code: str) -> Path:
+    return paths.daily_basic_dir / f"{code.replace('.', '_')}.parquet"
 
 
 def infer_board(code: str) -> str:
@@ -237,10 +249,68 @@ def normalize_daily(rows: list[dict], code_name: str, board: str) -> pd.DataFram
     ]
 
 
+def normalize_daily_basic(rows: list[dict], code: str) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(rows)
+    if "symbol" not in frame.columns:
+        frame["symbol"] = to_gm_symbol(code)
+    if "trade_date" not in frame.columns:
+        for candidate in ["date", "pub_date", "rpt_date"]:
+            if candidate in frame.columns:
+                frame["trade_date"] = frame[candidate]
+                break
+    if "trade_date" not in frame.columns:
+        return pd.DataFrame()
+
+    frame["code"] = code
+    frame["date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
+    for col in ["turnrate", "ttl_shr", "circ_shr", "ttl_shr_unl", "ttl_shr_ltd", "a_shr_unl"]:
+        if col not in frame.columns:
+            frame[col] = None
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+
+    frame = frame.dropna(subset=["date"])
+    if frame.empty:
+        return pd.DataFrame()
+
+    return frame[
+        [
+            "date",
+            "code",
+            "turnrate",
+            "ttl_shr",
+            "circ_shr",
+            "ttl_shr_unl",
+            "ttl_shr_ltd",
+            "a_shr_unl",
+        ]
+    ]
+
+
 def merge_daily_file(paths: Paths, incoming: pd.DataFrame, code: str) -> int:
     if incoming.empty:
         return 0
     path = stock_output_path(paths, code)
+    if path.exists():
+        existing = pd.read_parquet(path)
+        existing["date"] = pd.to_datetime(existing["date"]).dt.date
+        before = len(existing)
+        merged = pd.concat([existing, incoming], ignore_index=True)
+    else:
+        before = 0
+        merged = incoming
+    merged = merged.drop_duplicates(subset=["code", "date"], keep="last")
+    merged = merged.sort_values(["code", "date"]).reset_index(drop=True)
+    merged.to_parquet(path, index=False)
+    return max(0, len(merged) - before)
+
+
+def merge_daily_basic_file(paths: Paths, incoming: pd.DataFrame, code: str) -> int:
+    if incoming.empty:
+        return 0
+    path = daily_basic_output_path(paths, code)
     if path.exists():
         existing = pd.read_parquet(path)
         existing["date"] = pd.to_datetime(existing["date"]).dt.date
@@ -267,6 +337,12 @@ def rebuild_duckdb(paths: Paths) -> None:
         conn.execute("CREATE OR REPLACE TABLE daily_bars AS SELECT * FROM read_parquet(?)", [pattern])
         conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_code_date ON daily_bars(code, date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_bars(date)")
+        daily_basic_files = list(paths.daily_basic_dir.glob("*.parquet")) if paths.daily_basic_dir.exists() else []
+        if daily_basic_files:
+            basic_pattern = str(paths.daily_basic_dir / "*.parquet")
+            conn.execute("CREATE OR REPLACE TABLE daily_basic AS SELECT * FROM read_parquet(?)", [basic_pattern])
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_basic_code_date ON daily_basic(code, date)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_basic_date ON daily_basic(date)")
         conn.execute("""
             CREATE OR REPLACE TABLE weekly_bars AS
             WITH source AS (
@@ -356,13 +432,18 @@ def backup_existing(paths: Paths) -> Path | None:
         shutil.copy2(paths.duckdb_path, target / paths.duckdb_path.name)
     if paths.daily_dir.exists():
         shutil.copytree(paths.daily_dir, target / "daily_bars")
+    if paths.daily_basic_dir.exists():
+        shutil.copytree(paths.daily_basic_dir, target / "daily_basic")
     return target
 
 
 def clear_daily(paths: Paths) -> None:
     if paths.daily_dir.exists():
         shutil.rmtree(paths.daily_dir)
+    if paths.daily_basic_dir.exists():
+        shutil.rmtree(paths.daily_basic_dir)
     paths.daily_dir.mkdir(parents=True, exist_ok=True)
+    paths.daily_basic_dir.mkdir(parents=True, exist_ok=True)
     if paths.duckdb_path.exists():
         paths.duckdb_path.unlink()
 
@@ -406,6 +487,45 @@ def download_history(
     return touched, inserted_rows
 
 
+def download_daily_basic(
+    paths: Paths,
+    universe: pd.DataFrame,
+    start: date,
+    end: date,
+    sleep_seconds: float,
+) -> tuple[int, int]:
+    if stk_get_daily_basic is None:
+        print("[history-update:daily-basic] stk_get_daily_basic is unavailable in current gm SDK; skip turnrate download.", flush=True)
+        return 0, 0
+
+    touched = 0
+    inserted_rows = 0
+    fields = "turnrate,ttl_shr,circ_shr,ttl_shr_unl,ttl_shr_ltd,a_shr_unl"
+    for index, row in enumerate(universe.to_dict("records"), start=1):
+        code = str(row["code"])
+        symbol = to_gm_symbol(code)
+        print(f"[history-update:daily-basic] {index}/{len(universe)} {symbol}", flush=True)
+        try:
+            rows = stk_get_daily_basic(
+                symbol=symbol,
+                fields=fields,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+                df=False,
+            ) or []
+        except TypeError:
+            rows = stk_get_daily_basic(symbol, fields, start.isoformat(), end.isoformat(), False) or []
+
+        normalized = normalize_daily_basic([normalize_item(item) for item in rows], code)
+        inserted = merge_daily_basic_file(paths, normalized, code)
+        inserted_rows += inserted
+        if inserted > 0:
+            touched += 1
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    return touched, inserted_rows
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Update A-share historical daily bars from EastMoney Quant SDK.")
     parser.add_argument("--data-dir", required=True)
@@ -430,6 +550,7 @@ def main() -> int:
     paths = Paths(Path(args.data_dir).resolve())
     paths.parquet.mkdir(parents=True, exist_ok=True)
     paths.daily_dir.mkdir(parents=True, exist_ok=True)
+    paths.daily_basic_dir.mkdir(parents=True, exist_ok=True)
     set_token(token)
 
     end = pd.to_datetime(args.end).date()
@@ -479,9 +600,17 @@ def main() -> int:
         args.sleep_seconds,
         args.adjustflag,
     )
+    basic_touched, basic_inserted_rows = download_daily_basic(
+        paths,
+        universe,
+        start,
+        end,
+        args.sleep_seconds,
+    )
     rebuild_duckdb(paths)
     print(
         f"[history-update] completed. touched_stocks={touched} inserted_rows={inserted_rows} "
+        f"daily_basic_touched={basic_touched} daily_basic_rows={basic_inserted_rows} "
         f"weekly_mode=aggregate-daily from={start} to={end} duckdb={paths.duckdb_path}",
         flush=True,
     )

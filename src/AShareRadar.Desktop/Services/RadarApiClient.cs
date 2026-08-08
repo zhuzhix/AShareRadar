@@ -2,13 +2,12 @@
 using System.Net.Http.Json;
 using AShareRadar.Contracts.Backtesting;
 using AShareRadar.Contracts.History;
+using AShareRadar.Contracts.Jobs;
 using AShareRadar.Contracts.MarketData;
 using AShareRadar.Contracts.Monitoring;
 using AShareRadar.Contracts.Opportunities;
 using AShareRadar.Contracts.Review;
-using AShareRadar.Contracts.Qlib;
 using AShareRadar.Contracts.Strategies;
-using AShareRadar.Contracts.StrategyTraining;
 
 namespace AShareRadar.Desktop.Services;
 
@@ -138,36 +137,6 @@ public sealed class RadarApiClient
             cancellationToken);
     }
 
-    public async Task StartAsync(int scanIntervalSeconds, CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsJsonAsync(
-            "/api/monitor/start",
-            new StartMonitorRequest(scanIntervalSeconds),
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-    }
-
-    public async Task PauseAsync(CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsync(
-            "/api/monitor/pause",
-            content: null,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-    }
-
-    public async Task ScanOnceAsync(CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsync(
-            "/api/monitor/scan-once",
-            content: null,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-    }
-
     public async Task<IReadOnlyList<OpportunityDto>> GetOpportunitiesAsync(
         string view,
         CancellationToken cancellationToken)
@@ -248,17 +217,17 @@ public sealed class RadarApiClient
             cancellationToken);
     }
 
-    public async Task<PredictionReviewDto?> GeneratePredictionReviewAsync(
+    public async Task<CreateBackgroundJobResponse?> StartNextDayPredictionJobAsync(
         DateOnly date,
         CancellationToken cancellationToken)
     {
         var response = await _httpClient.PostAsync(
-            $"/api/review/predictions/generate?date={Uri.EscapeDataString(date.ToString("yyyy-MM-dd"))}",
+            $"/api/jobs/next-day-prediction?date={Uri.EscapeDataString(date.ToString("yyyy-MM-dd"))}",
             content: null,
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<PredictionReviewDto>(cancellationToken);
+        return await response.Content.ReadFromJsonAsync<CreateBackgroundJobResponse>(cancellationToken);
     }
 
     public async Task<PredictionReviewDto?> VerifyPredictionReviewAsync(
@@ -274,6 +243,91 @@ public sealed class RadarApiClient
         return await response.Content.ReadFromJsonAsync<PredictionReviewDto>(cancellationToken);
     }
 
+    public async Task<LongTermTrackingQueryResultDto?> GetLongTermTrackingAsync(
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? symbol,
+        string? strategyCode,
+        string? status,
+        string sortBy,
+        bool descending,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var parameters = new List<string>();
+        if (fromDate.HasValue)
+        {
+            parameters.Add($"fromDate={Uri.EscapeDataString(fromDate.Value.ToString("yyyy-MM-dd"))}");
+        }
+
+        if (toDate.HasValue)
+        {
+            parameters.Add($"toDate={Uri.EscapeDataString(toDate.Value.ToString("yyyy-MM-dd"))}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(symbol))
+        {
+            parameters.Add($"symbol={Uri.EscapeDataString(symbol.Trim())}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(strategyCode))
+        {
+            parameters.Add($"strategyCode={Uri.EscapeDataString(strategyCode.Trim())}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            parameters.Add($"status={Uri.EscapeDataString(status.Trim())}");
+        }
+
+        parameters.Add($"sortBy={Uri.EscapeDataString(sortBy)}");
+        parameters.Add($"descending={descending.ToString().ToLowerInvariant()}");
+        parameters.Add($"count={count}");
+
+        return await _httpClient.GetFromJsonAsync<LongTermTrackingQueryResultDto>(
+            $"/api/review/long-term-tracking?{string.Join("&", parameters)}",
+            cancellationToken);
+    }
+
+    public async Task<LongTermTrackingBackfillResultDto?> BackfillLongTermTrackingAsync(CancellationToken cancellationToken)
+    {
+        var response = await _httpClient.PostAsync(
+            "/api/review/long-term-tracking/backfill",
+            content: null,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LongTermTrackingBackfillResultDto>(cancellationToken);
+    }
+
+    public async Task<LongTermTrackingItemDto?> UpdateLongTermTrackingStatusAsync(
+        Guid id,
+        string status,
+        CancellationToken cancellationToken)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"/api/review/long-term-tracking/{id}/status",
+            new UpdateLongTermTrackingStatusRequest(status),
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LongTermTrackingItemDto>(cancellationToken);
+    }
+
+    public async Task<LongTermTrackingItemDto?> UpdateLongTermTrackingNoteAsync(
+        Guid id,
+        string? note,
+        CancellationToken cancellationToken)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"/api/review/long-term-tracking/{id}/note",
+            new UpdateLongTermTrackingNoteRequest(note),
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LongTermTrackingItemDto>(cancellationToken);
+    }
+
     public async Task<HistoricalDataUpdateStatusDto?> GetHistoricalDataUpdateStatusAsync(CancellationToken cancellationToken)
     {
         return await _httpClient.GetFromJsonAsync<HistoricalDataUpdateStatusDto>(
@@ -281,7 +335,7 @@ public sealed class RadarApiClient
             cancellationToken);
     }
 
-    public async Task<HistoricalDataUpdateStatusDto?> TriggerHistoricalDataUpdateAsync(CancellationToken cancellationToken)
+    public async Task<CreateBackgroundJobResponse?> TriggerHistoricalDataUpdateAsync(CancellationToken cancellationToken)
     {
         var response = await _httpClient.PostAsync(
             "/api/history-data/update-now",
@@ -289,26 +343,52 @@ public sealed class RadarApiClient
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<HistoricalDataUpdateStatusDto>(cancellationToken);
+        return await response.Content.ReadFromJsonAsync<CreateBackgroundJobResponse>(cancellationToken);
     }
 
-    public async Task<MarketMappingUpdateStatusDto?> GetMarketMappingUpdateStatusAsync(CancellationToken cancellationToken)
-    {
-        return await _httpClient.GetFromJsonAsync<MarketMappingUpdateStatusDto>(
-            "/api/market-data/mapping-update/status",
-            cancellationToken);
-    }
-
-    public async Task<MarketMappingUpdateStatusDto?> TriggerMarketMappingUpdateAsync(CancellationToken cancellationToken)
+    public async Task<CreateBackgroundJobResponse?> StartM30KLineUpdateJobAsync(CancellationToken cancellationToken)
     {
         var response = await _httpClient.PostAsync(
-            "/api/market-data/mapping-update/run",
+            "/api/jobs/m30-kline-update",
             content: null,
             cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<MarketMappingUpdateStatusDto>(cancellationToken);
+        return await response.Content.ReadFromJsonAsync<CreateBackgroundJobResponse>(cancellationToken);
     }
+
+    public async Task<BackgroundJobDto?> GetJobAsync(Guid id, CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<BackgroundJobDto>(
+            $"/api/jobs/{id}",
+            cancellationToken);
+    }
+
+    public async Task<BackgroundJobDto?> GetLatestJobAsync(string? type, CancellationToken cancellationToken)
+    {
+        var path = string.IsNullOrWhiteSpace(type)
+            ? "/api/jobs/latest"
+            : $"/api/jobs/latest?type={Uri.EscapeDataString(type)}";
+        return await _httpClient.GetFromJsonAsync<BackgroundJobDto>(path, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<BackgroundJobDto>> GetActiveJobsAsync(CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<BackgroundJobDto[]>(
+            "/api/jobs/active",
+            cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<BackgroundJobLogDto>> GetJobLogsAsync(
+        Guid id,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<BackgroundJobLogDto[]>(
+            $"/api/jobs/{id}/logs?count={count}",
+            cancellationToken) ?? [];
+    }
+
 
     public async Task<IReadOnlyList<StrategyDefinitionDto>> GetStrategiesAsync(CancellationToken cancellationToken)
     {
@@ -330,113 +410,6 @@ public sealed class RadarApiClient
         return await response.Content.ReadFromJsonAsync<BacktestReplayResultDto>(cancellationToken);
     }
 
-    public async Task<StrategyTrainingDatasetDto?> BuildStrategyTrainingDatasetAsync(
-        StrategyTrainingDatasetRequest request,
-        CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsJsonAsync(
-            "/api/strategy-training/dataset",
-            request,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<StrategyTrainingDatasetDto>(cancellationToken);
-    }
-
-    public async Task<StrategyTrainingRunDto?> RunStrategyTrainingAsync(
-        StrategyTrainingRunRequest request,
-        CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsJsonAsync(
-            "/api/strategy-training/run",
-            request,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<StrategyTrainingRunDto>(cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<StrategyParameterProfileDto>> GetStrategyParameterProfilesAsync(
-        string? strategyCode,
-        CancellationToken cancellationToken)
-    {
-        var path = string.IsNullOrWhiteSpace(strategyCode)
-            ? "/api/strategy-parameters"
-            : $"/api/strategy-parameters?strategyCode={Uri.EscapeDataString(strategyCode.Trim())}";
-        return await _httpClient.GetFromJsonAsync<StrategyParameterProfileDto[]>(path, cancellationToken) ?? [];
-    }
-
-    public async Task<StrategyParameterProfileDto?> SaveStrategyParameterProfileAsync(
-        SaveStrategyParameterProfileRequest request,
-        CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsJsonAsync(
-            "/api/strategy-parameters",
-            request,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<StrategyParameterProfileDto>(cancellationToken);
-    }
-
-    public async Task<StrategyParameterProfileDto?> ActivateStrategyParameterProfileAsync(
-        Guid id,
-        CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsync(
-            $"/api/strategy-parameters/{id}/activate",
-            content: null,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<StrategyParameterProfileDto>(cancellationToken);
-    }
-
-    public async Task<QlibSignalStatusDto?> GetQlibR013SignalStatusAsync(CancellationToken cancellationToken)
-    {
-        return await _httpClient.GetFromJsonAsync<QlibSignalStatusDto>(
-            "/api/qlib-signals/r013/status",
-            cancellationToken);
-    }
-
-    public async Task<QlibSignalSnapshotDto?> GetQlibR013LatestAsync(CancellationToken cancellationToken)
-    {
-        return await _httpClient.GetFromJsonAsync<QlibSignalSnapshotDto>(
-            "/api/qlib-signals/r013/latest",
-            cancellationToken);
-    }
-
-    public async Task<QlibSignalSnapshotDto?> GetQlibR013RebalancePlanAsync(CancellationToken cancellationToken)
-    {
-        return await _httpClient.GetFromJsonAsync<QlibSignalSnapshotDto>(
-            "/api/qlib-signals/r013/rebalance-plan",
-            cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<QlibSignalSeedDto>> GetQlibR013SeedsAsync(
-        DateOnly? signalDate,
-        int count,
-        CancellationToken cancellationToken)
-    {
-        var path = signalDate.HasValue
-            ? $"/api/qlib-signals/r013/seeds?signalDate={Uri.EscapeDataString(signalDate.Value.ToString("yyyy-MM-dd"))}&count={count}"
-            : $"/api/qlib-signals/r013/seeds?count={count}";
-
-        return await _httpClient.GetFromJsonAsync<QlibSignalSeedDto[]>(
-            path,
-            cancellationToken) ?? [];
-    }
-
-    public async Task<QlibSignalSeedImportResultDto?> ImportQlibR013SeedsAsync(CancellationToken cancellationToken)
-    {
-        var response = await _httpClient.PostAsync(
-            "/api/qlib-signals/r013/import-seeds",
-            content: null,
-            cancellationToken);
-
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<QlibSignalSeedImportResultDto>(cancellationToken);
-    }
     private static string BuildHistoryQuery(DateOnly? tradingDate, string? symbol, string? strategyCode, int count)
     {
         var parts = new List<string>

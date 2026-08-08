@@ -131,9 +131,14 @@ public sealed class EastMoneyQuantDotNetRealtimeProvider : IMarketDataProvider
 
     private static StockQuote ToStockQuote(EastMoneyQuantDotNetQuote quote, decimal previousClose)
     {
-        var changePercent = previousClose > 0
+        var calculatedChange = previousClose > 0
             ? Math.Round((quote.Price - previousClose) / previousClose * 100m, 4)
             : quote.ChangePercent;
+        var changePercent = Math.Abs(quote.ChangePercent) <= 30m
+            ? quote.ChangePercent
+            : calculatedChange;
+        if (Math.Abs(changePercent) > 30m)
+            changePercent = 0m;
 
         return new StockQuote(
             quote.Symbol,

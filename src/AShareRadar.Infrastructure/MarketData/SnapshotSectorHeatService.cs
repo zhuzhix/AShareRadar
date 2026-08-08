@@ -1,10 +1,12 @@
 using AShareRadar.Application.MarketData;
 using AShareRadar.Domain.MarketData;
+using Microsoft.Extensions.Logging;
 
 namespace AShareRadar.Infrastructure.MarketData;
 
 public sealed class SnapshotSectorHeatService : ISectorHeatService
 {
+    private readonly ILogger<SnapshotSectorHeatService> _logger;
     private readonly object _mappingSync = new();
     private readonly string _sectorMappingPath;
     private readonly string _conceptMappingPath;
@@ -56,10 +58,12 @@ public sealed class SnapshotSectorHeatService : ISectorHeatService
         "ST"
     ];
 
-    public SnapshotSectorHeatService(MarketDataOptions options)
+    public SnapshotSectorHeatService(MarketDataOptions options, ILogger<SnapshotSectorHeatService> logger)
     {
+        _logger = logger;
         _sectorMappingPath = ResolvePath(options.SectorMappingPath);
         _conceptMappingPath = ResolvePath(options.ConceptMappingPath);
+        _logger.LogInformation("Mapping service initializing. SectorPath={SectorPath} ConceptPath={ConceptPath}", _sectorMappingPath, _conceptMappingPath);
         _sectorMappingStatus = BuildMappingStatus(_sectorMappingPath, 0);
         _conceptMappingStatus = BuildMappingStatus(_conceptMappingPath, 0);
         ReloadMappings();
@@ -161,16 +165,59 @@ public sealed class SnapshotSectorHeatService : ISectorHeatService
 
     public void ReloadMappings()
     {
-        var sectorMappingBySymbol = LoadSectorMappings(_sectorMappingPath);
-        var conceptMappingsBySymbol = LoadConceptMappings(_conceptMappingPath);
-        lock (_mappingSync)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        _logger.LogInformation(
+            "Mapping reload started. SectorPath={SectorPath} SectorExists={SectorExists} ConceptPath={ConceptPath} ConceptExists={ConceptExists}",
+            _sectorMappingPath,
+            File.Exists(_sectorMappingPath),
+            _conceptMappingPath,
+            File.Exists(_conceptMappingPath));
+        try
         {
-            _sectorMappingBySymbol = sectorMappingBySymbol;
-            _sectorMappingStatus = BuildMappingStatus(_sectorMappingPath, sectorMappingBySymbol.Count);
-            _conceptMappingsBySymbol = conceptMappingsBySymbol;
-            _conceptMappingStatus = BuildMappingStatus(
+            var sectorLoad = LoadSectorMappings(_sectorMappingPath);
+            var conceptLoad = LoadConceptMappings(_conceptMappingPath);
+            lock (_mappingSync)
+            {
+                _sectorMappingBySymbol = sectorLoad.Mappings;
+                _sectorMappingStatus = BuildMappingStatus(_sectorMappingPath, sectorLoad.Mappings.Count);
+                _conceptMappingsBySymbol = conceptLoad.Mappings;
+                _conceptMappingStatus = BuildMappingStatus(
+                    _conceptMappingPath,
+                    conceptLoad.Mappings.Sum(item => item.Value.Count));
+            }
+
+            _logger.LogInformation(
+                "Mapping reload completed. SectorRawRows={SectorRawRows} SectorValidRows={SectorValidRows} SectorInvalidRows={SectorInvalidRows} SectorSymbols={SectorSymbols} ConceptRawRows={ConceptRawRows} ConceptValidRows={ConceptValidRows} ConceptInvalidRows={ConceptInvalidRows} DynamicConceptRows={DynamicConceptRows} ConceptSymbols={ConceptSymbols} ConceptMappings={ConceptMappings} ElapsedMs={ElapsedMs}",
+                sectorLoad.RawRows,
+                sectorLoad.ValidRows,
+                sectorLoad.InvalidRows,
+                sectorLoad.Mappings.Count,
+                conceptLoad.RawRows,
+                conceptLoad.ValidRows,
+                conceptLoad.InvalidRows,
+                conceptLoad.FilteredRows,
+                conceptLoad.Mappings.Count,
+                conceptLoad.Mappings.Sum(item => item.Value.Count),
+                stopwatch.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            int previousSectorCount;
+            int previousConceptCount;
+            lock (_mappingSync)
+            {
+                previousSectorCount = _sectorMappingBySymbol.Count;
+                previousConceptCount = _conceptMappingsBySymbol.Sum(item => item.Value.Count);
+            }
+            _logger.LogError(
+                ex,
+                "Mapping reload failed; previous mappings retained. SectorPath={SectorPath} ConceptPath={ConceptPath} PreviousSectorCount={PreviousSectorCount} PreviousConceptCount={PreviousConceptCount} ElapsedMs={ElapsedMs}",
+                _sectorMappingPath,
                 _conceptMappingPath,
-                conceptMappingsBySymbol.Sum(item => item.Value.Count));
+                previousSectorCount,
+                previousConceptCount,
+                stopwatch.ElapsedMilliseconds);
+            throw;
         }
     }
 
@@ -221,18 +268,23 @@ public sealed class SnapshotSectorHeatService : ISectorHeatService
         return [];
     }
 
-    private static IReadOnlyDictionary<string, SectorMappingEntry> LoadSectorMappings(string mappingPath)
+    private static MappingLoadResult<IReadOnlyDictionary<string, SectorMappingEntry>> LoadSectorMappings(string mappingPath)
     {
         if (!File.Exists(mappingPath))
         {
-            return new Dictionary<string, SectorMappingEntry>(StringComparer.OrdinalIgnoreCase);
+            return new(new Dictionary<string, SectorMappingEntry>(StringComparer.OrdinalIgnoreCase), 0, 0, 0, 0);
         }
 
         var mappings = new Dictionary<string, SectorMappingEntry>(StringComparer.OrdinalIgnoreCase);
+        var rawRows = 0;
+        var validRows = 0;
+        var invalidRows = 0;
         foreach (var columns in ReadCsvRows(mappingPath))
         {
+            rawRows++;
             if (columns.Count < 3)
             {
+                invalidRows++;
                 continue;
             }
 
@@ -242,32 +294,49 @@ public sealed class SnapshotSectorHeatService : ISectorHeatService
             if (IsValidMapping(symbol, code, name))
             {
                 mappings[symbol] = new SectorMappingEntry(code, name);
+                validRows++;
+            }
+            else
+            {
+                invalidRows++;
             }
         }
 
-        return mappings;
+        return new(mappings, rawRows, validRows, invalidRows, 0);
     }
 
-    private static IReadOnlyDictionary<string, IReadOnlyList<ConceptMappingEntry>> LoadConceptMappings(string mappingPath)
+    private static MappingLoadResult<IReadOnlyDictionary<string, IReadOnlyList<ConceptMappingEntry>>> LoadConceptMappings(string mappingPath)
     {
         if (!File.Exists(mappingPath))
         {
-            return new Dictionary<string, IReadOnlyList<ConceptMappingEntry>>(StringComparer.OrdinalIgnoreCase);
+            return new(new Dictionary<string, IReadOnlyList<ConceptMappingEntry>>(StringComparer.OrdinalIgnoreCase), 0, 0, 0, 0);
         }
 
         var mappings = new Dictionary<string, List<ConceptMappingEntry>>(StringComparer.OrdinalIgnoreCase);
+        var rawRows = 0;
+        var validRows = 0;
+        var invalidRows = 0;
+        var filteredRows = 0;
         foreach (var columns in ReadCsvRows(mappingPath))
         {
+            rawRows++;
             if (columns.Count < 3)
             {
+                invalidRows++;
                 continue;
             }
 
             var symbol = StockSymbolNormalizer.NormalizeCode(columns[0]);
             var code = columns[1].Trim();
             var name = columns[2].Trim();
-            if (!IsValidMapping(symbol, code, name) || IsDynamicConcept(name))
+            if (!IsValidMapping(symbol, code, name))
             {
+                invalidRows++;
+                continue;
+            }
+            if (IsDynamicConcept(name))
+            {
+                filteredRows++;
                 continue;
             }
 
@@ -280,13 +349,15 @@ public sealed class SnapshotSectorHeatService : ISectorHeatService
             if (items.All(item => !string.Equals(item.Code, code, StringComparison.OrdinalIgnoreCase)))
             {
                 items.Add(new ConceptMappingEntry(code, name));
+                validRows++;
             }
         }
 
-        return mappings.ToDictionary(
+        var result = mappings.ToDictionary(
             item => item.Key,
             item => (IReadOnlyList<ConceptMappingEntry>)item.Value.ToArray(),
             StringComparer.OrdinalIgnoreCase);
+        return new(result, rawRows, validRows, invalidRows, filteredRows);
     }
 
     private static IEnumerable<IReadOnlyList<string>> ReadCsvRows(string mappingPath)
@@ -447,6 +518,13 @@ public sealed class SnapshotSectorHeatService : ISectorHeatService
     private sealed record SectorMappingEntry(string Code, string Name);
 
     private sealed record ConceptMappingEntry(string Code, string Name);
+
+    private sealed record MappingLoadResult<T>(
+        T Mappings,
+        int RawRows,
+        int ValidRows,
+        int InvalidRows,
+        int FilteredRows);
 
     private sealed record CommonHeat(
         int StockCount,

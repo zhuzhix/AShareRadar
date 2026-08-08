@@ -39,7 +39,7 @@ public sealed class HistoricalDataUpdateService
         {
             try
             {
-                await RunUpdateCoreAsync("manual", null, CancellationToken.None);
+                await RunUpdateCoreAsync("manual", null, CancellationToken.None, null);
             }
             finally
             {
@@ -48,6 +48,25 @@ public sealed class HistoricalDataUpdateService
         });
 
         return true;
+    }
+
+    public async Task<bool> RunManualJobAsync(
+        CancellationToken cancellationToken,
+        Action<string, bool>? lineSink = null)
+    {
+        if (!_options.Enabled || !await _gate.WaitAsync(0, cancellationToken))
+        {
+            throw new InvalidOperationException("历史更新任务已在运行，不能重复启动。");
+        }
+
+        try
+        {
+            return await RunUpdateCoreAsync("job", null, cancellationToken, lineSink);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task<bool> TryRunScheduledAsync(
@@ -62,7 +81,7 @@ public sealed class HistoricalDataUpdateService
 
         try
         {
-            return await RunUpdateCoreAsync(trigger, targetDate, cancellationToken);
+            return await RunUpdateCoreAsync(trigger, targetDate, cancellationToken, null);
         }
         finally
         {
@@ -73,7 +92,8 @@ public sealed class HistoricalDataUpdateService
     private async Task<bool> RunUpdateCoreAsync(
         string trigger,
         DateOnly? targetDate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string, bool>? lineSink)
     {
         var pythonPath = ResolvePath(_options.PythonPath);
         var scriptPath = ResolvePath(_options.ScriptPath);
@@ -104,8 +124,8 @@ public sealed class HistoricalDataUpdateService
             };
             AddLocalPythonPackages(process.StartInfo, scriptPath);
 
-            process.OutputDataReceived += (_, args) => HandleProcessLine(args.Data, isError: false);
-            process.ErrorDataReceived += (_, args) => HandleProcessLine(args.Data, isError: true);
+            process.OutputDataReceived += (_, args) => HandleProcessLine(args.Data, isError: false, lineSink);
+            process.ErrorDataReceived += (_, args) => HandleProcessLine(args.Data, isError: true, lineSink);
 
             process.Start();
             process.BeginOutputReadLine();
@@ -173,7 +193,7 @@ public sealed class HistoricalDataUpdateService
         }
     }
 
-    private void HandleProcessLine(string? line, bool isError)
+    private void HandleProcessLine(string? line, bool isError, Action<string, bool>? lineSink)
     {
         if (string.IsNullOrWhiteSpace(line))
         {
@@ -188,6 +208,8 @@ public sealed class HistoricalDataUpdateService
         {
             _logger.LogInformation("[history-update] {Message}", line);
         }
+
+        lineSink?.Invoke(line, isError);
 
         lock (_sync)
         {

@@ -2,50 +2,52 @@
 using AShareRadar.Application.Backtesting;
 using AShareRadar.Application.History;
 using AShareRadar.Application.Indicators;
+using AShareRadar.Application.Jobs;
 using AShareRadar.Application.Monitoring;
 using AShareRadar.Application.MarketData;
 using AShareRadar.Application.Opportunities;
 using AShareRadar.Application.Realtime;
 using AShareRadar.Application.Review;
 using AShareRadar.Application.Strategies;
-using AShareRadar.Application.StrategyTraining;
-using AShareRadar.Application.Qlib;
 using AShareRadar.Contracts.Backtesting;
+using AShareRadar.Contracts.Jobs;
 using AShareRadar.Contracts.Monitoring;
 using AShareRadar.Contracts.History;
 using AShareRadar.Contracts.MarketData;
 using AShareRadar.Contracts.Opportunities;
 using AShareRadar.Contracts.Review;
-using AShareRadar.Contracts.Qlib;
 using AShareRadar.Contracts.Strategies;
-using AShareRadar.Contracts.StrategyTraining;
 using AShareRadar.Infrastructure.MarketData;
 using AShareRadar.Application.Opportunities.Storage;
 using AShareRadar.Persistence.Database;
 using AShareRadar.Persistence.History;
+using AShareRadar.Persistence.Jobs;
 using AShareRadar.Persistence.MarketData;
 using AShareRadar.Persistence.Opportunities;
-using AShareRadar.Persistence.Qlib;
 using AShareRadar.Persistence.Review;
-using AShareRadar.Persistence.StrategyTraining;
 using AShareRadar.ServiceHost.Hubs;
+using AShareRadar.ServiceHost.Jobs;
 using AShareRadar.ServiceHost.Realtime;
+using AShareRadar.ServiceHost.Services;
 using AShareRadar.ServiceHost.Workers;
 using AShareRadar.Strategies.Intraday;
-using AShareRadar.Strategies.Qlib;
 using AShareRadar.Strategies.Registry;
 using DuckDB.NET.Data;
+using NLog.Web;
 
 System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
+builder.Host.UseNLog();
 
 builder.Services.AddSingleton<MonitorRuntimeState>();
 builder.Services.AddSingleton(
     builder.Configuration.GetSection("MarketSentimentStrategy")
         .Get<MarketSentimentStrategyOptions>() ?? new MarketSentimentStrategyOptions());
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection("StrategyPools")
+        .Get<StrategyPoolScanOptions>() ?? new StrategyPoolScanOptions());
 builder.Services.AddSingleton(
     builder.Configuration.GetSection("MarketSentimentExternalData")
         .Get<MarketSentimentExternalDataOptions>() ?? new MarketSentimentExternalDataOptions());
@@ -63,12 +65,12 @@ var databaseOptions = builder.Configuration
     .Get<DatabaseOptions>() ?? new DatabaseOptions();
 builder.Services.AddSingleton(databaseOptions);
 builder.Services.AddSingleton<SqliteDatabase>();
+builder.Services.AddSingleton<IBackgroundJobStore, SqliteBackgroundJobStore>();
+builder.Services.AddSingleton<BackgroundJobQueue>();
+builder.Services.AddSingleton<BackgroundJobService>();
 builder.Services.AddSingleton<SqliteOpportunityStateStore>();
 builder.Services.AddSingleton<IHistoryQueryService, SqliteHistoryQueryService>();
 builder.Services.AddSingleton<IMarketSentimentStore, SqliteMarketSentimentStore>();
-builder.Services.AddSingleton<SqliteStrategyTrainingStore>();
-builder.Services.AddSingleton<IStrategyTrainingStore>(services => services.GetRequiredService<SqliteStrategyTrainingStore>());
-builder.Services.AddSingleton<IStrategyParameterProfileStore>(services => services.GetRequiredService<SqliteStrategyTrainingStore>());
 builder.Services.AddSingleton<IMarketSentimentExternalDataProvider, ConfiguredMarketSentimentExternalDataProvider>();
 builder.Services.AddSingleton<ILimitPoolProvider>(services =>
 {
@@ -105,17 +107,13 @@ builder.Services.AddSingleton<MonitorAppService>();
 builder.Services.AddSingleton<OpportunityAppService>();
 builder.Services.AddSingleton<ReviewAppService>();
 builder.Services.AddSingleton<PredictionReviewService>();
-builder.Services.AddSingleton(builder.Configuration.GetSection("QlibSignals").Get<QlibSignalOptions>() ?? new QlibSignalOptions());
-builder.Services.AddSingleton<QlibSignalFileReader>();
-builder.Services.AddSingleton<IQlibSignalSeedStore, SqliteQlibSignalSeedStore>();
-builder.Services.AddSingleton<QlibSignalSyncService>();
+builder.Services.AddSingleton<ILongTermTrackingStore, SqliteLongTermTrackingStore>();
+builder.Services.AddSingleton<LongTermTrackingService>();
 builder.Services.AddSingleton<BacktestReplayService>();
 builder.Services.AddSingleton<ScanOrchestrator>();
 builder.Services.AddSingleton<IIndicatorCalculator, IndicatorCalculator>();
 builder.Services.AddSingleton<ISectorHeatService, SnapshotSectorHeatService>();
 builder.Services.AddSingleton<MarketSentimentService>();
-builder.Services.AddSingleton<StrategyTrainingService>();
-builder.Services.AddSingleton<StrategyParameterProfileService>();
 builder.Services.AddSingleton<DailyLimitUpExclusionService>();
 
 var marketDataOptions = builder.Configuration
@@ -188,8 +186,14 @@ builder.Services.AddSingleton<DuckDbMinuteKLineCacheProvider>(services =>
     var options = services.GetRequiredService<DatabaseOptions>();
     return new DuckDbMinuteKLineCacheProvider(options.DuckDbPath);
 });
+builder.Services.AddSingleton<DuckDbIntradayKLineCacheProvider>(services =>
+{
+    var options = services.GetRequiredService<DatabaseOptions>();
+    return new DuckDbIntradayKLineCacheProvider(options.DuckDbPath);
+});
 builder.Services.AddSingleton<IKLineDataProvider>(services => new HybridKLineDataProvider(
     services.GetRequiredService<DuckDbMinuteKLineCacheProvider>(),
+    services.GetRequiredService<DuckDbIntradayKLineCacheProvider>(),
     services.GetRequiredService<EastMoneyQuantDotNetKLineDataProvider>(),
     services.GetRequiredService<EastMoneyQuantKLineDataProvider>(),
     services.GetRequiredService<TencentKLineDataProvider>(),
@@ -228,7 +232,6 @@ builder.Services.AddSingleton<ISignalStrategy, CounterTrendStrengthStrategy>();
 builder.Services.AddSingleton<ISignalStrategy, StrongRepairReboundStrategy>();
 builder.Services.AddSingleton<ISignalStrategy, DreamerDaAStrategy>();
 builder.Services.AddSingleton<ISignalStrategy, ZhongheYingtaiMainriseStrategy>();
-builder.Services.AddSingleton<ISignalStrategy, QlibR013SignalStrategy>();
 builder.Services.AddSingleton<IStrategyRegistry, StrategyRegistry>();
 builder.Services.AddSingleton<IRealtimeEventPublisher, SignalRRealtimeEventPublisher>();
 var historicalDataUpdateOptions = builder.Configuration
@@ -236,11 +239,7 @@ var historicalDataUpdateOptions = builder.Configuration
     .Get<HistoricalDataUpdateOptions>() ?? new HistoricalDataUpdateOptions();
 builder.Services.AddSingleton(historicalDataUpdateOptions);
 builder.Services.AddSingleton<HistoricalDataUpdateService>();
-var marketMappingUpdateOptions = builder.Configuration
-    .GetSection("MarketMappingUpdate")
-    .Get<MarketMappingUpdateOptions>() ?? new MarketMappingUpdateOptions();
-builder.Services.AddSingleton(marketMappingUpdateOptions);
-builder.Services.AddSingleton<MarketMappingUpdateService>();
+builder.Services.AddSingleton<MarketMappingSyncService>();
 var historicalStrategyScanOptions = builder.Configuration
     .GetSection("HistoricalStrategyScan")
     .Get<HistoricalStrategyScanOptions>() ?? new HistoricalStrategyScanOptions();
@@ -254,17 +253,90 @@ var minuteKLineCacheWorkerOptions = builder.Configuration
     .GetSection("MinuteKLineCacheWorker")
     .Get<MinuteKLineCacheWorkerOptions>() ?? new MinuteKLineCacheWorkerOptions();
 builder.Services.AddSingleton(minuteKLineCacheWorkerOptions);
+var thirtyMinuteKLineCacheWorkerOptions = builder.Configuration
+    .GetSection("ThirtyMinuteKLineCacheWorker")
+    .Get<ThirtyMinuteKLineCacheWorkerOptions>() ?? new ThirtyMinuteKLineCacheWorkerOptions();
+builder.Services.AddSingleton(thirtyMinuteKLineCacheWorkerOptions);
 builder.Services.AddSingleton<MarketSentimentRuntimeState>();
+builder.Services.AddSingleton<IBackgroundJobHandler, HistoryDataUpdateJobHandler>();
+builder.Services.AddSingleton<IBackgroundJobHandler, NextDayPredictionJobHandler>();
+builder.Services.AddSingleton<IBackgroundJobHandler, ThirtyMinuteKLineUpdateJobHandler>();
 
-builder.Services.AddSignalR();
+builder.Services
+    .AddSignalR()
+    .AddHubOptions<MonitorHub>(options =>
+    {
+        options.MaximumReceiveMessageSize = 4 * 1024 * 1024;
+    });
+builder.Services.AddHostedService<BackgroundJobWorker>();
 builder.Services.AddHostedService<MonitorWorker>();
 builder.Services.AddHostedService<HistoricalDataUpdateWorker>();
 builder.Services.AddHostedService<HistoricalStrategyScanWorker>();
 builder.Services.AddHostedService<ExternalSentimentAutoUpdateWorker>();
 builder.Services.AddHostedService<MarketSentimentWorker>();
 builder.Services.AddHostedService<MinuteKLineCacheWorker>();
+builder.Services.AddHostedService<ThirtyMinuteKLineCacheWorker>();
 
 var app = builder.Build();
+
+var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("AShareRadar.ServiceHost.Startup");
+startupLogger.LogInformation(
+    "ServiceHost started. Version={Version} BaseDirectory={BaseDirectory} ProcessId={ProcessId} Environment={Environment} OS={OS} Runtime={Runtime}",
+    typeof(Program).Assembly.GetName().Version,
+    AppContext.BaseDirectory,
+    Environment.ProcessId,
+    app.Environment.EnvironmentName,
+    Environment.OSVersion,
+    Environment.Version);
+
+app.Use(async (context, next) =>
+{
+    var stopwatch = Stopwatch.StartNew();
+    var requestLogger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("AShareRadar.Http.Request");
+    using var scope = requestLogger.BeginScope(new Dictionary<string, object>
+    {
+        ["TraceId"] = context.TraceIdentifier
+    });
+    try
+    {
+        await next();
+        var elapsedMs = stopwatch.ElapsedMilliseconds;
+        if (context.Response.StatusCode >= 500)
+        {
+            requestLogger.LogError(
+                "HTTP request returned a server error. Method={Method} Path={Path} StatusCode={StatusCode} ElapsedMs={ElapsedMs}",
+                context.Request.Method, context.Request.Path, context.Response.StatusCode, elapsedMs);
+        }
+        else if (context.Response.StatusCode >= 400 || elapsedMs >= 2000)
+        {
+            requestLogger.LogWarning(
+                "HTTP request completed with a warning. Method={Method} Path={Path} StatusCode={StatusCode} ElapsedMs={ElapsedMs}",
+                context.Request.Method, context.Request.Path, context.Response.StatusCode, elapsedMs);
+        }
+        else if (!HttpMethods.IsGet(context.Request.Method))
+        {
+            requestLogger.LogInformation(
+                "HTTP command completed. Method={Method} Path={Path} StatusCode={StatusCode} ElapsedMs={ElapsedMs}",
+                context.Request.Method, context.Request.Path, context.Response.StatusCode, elapsedMs);
+        }
+        else
+        {
+            requestLogger.LogDebug(
+                "HTTP query completed. Method={Method} Path={Path} StatusCode={StatusCode} ElapsedMs={ElapsedMs}",
+                context.Request.Method, context.Request.Path, context.Response.StatusCode, elapsedMs);
+        }
+    }
+    catch (Exception ex)
+    {
+        requestLogger.LogError(
+            ex,
+            "HTTP request failed. Method={Method} Path={Path} ElapsedMs={ElapsedMs}",
+            context.Request.Method,
+            context.Request.Path,
+            stopwatch.ElapsedMilliseconds);
+        throw;
+    }
+});
 
 app.MapGet("/", () => Results.Redirect("/api/monitor/status"));
 
@@ -285,24 +357,6 @@ app.MapGet("/api/monitor/status", (MonitorAppService monitorAppService) =>
         status.NextHistoricalStrategyScanTime,
         status.HistoricalStrategyScanSymbolCount,
         status.HistoricalStrategyScanSignalCount);
-});
-
-app.MapPost("/api/monitor/start", (StartMonitorRequest request, MonitorAppService monitorAppService) =>
-{
-    var status = monitorAppService.Start(request.ScanIntervalSeconds);
-    return Results.Accepted("/api/monitor/status", status);
-});
-
-app.MapPost("/api/monitor/pause", (MonitorAppService monitorAppService) =>
-{
-    var status = monitorAppService.Pause();
-    return Results.Accepted("/api/monitor/status", status);
-});
-
-app.MapPost("/api/monitor/scan-once", async (ScanOrchestrator scanOrchestrator, CancellationToken cancellationToken) =>
-{
-    await scanOrchestrator.RunOnceAsync(cancellationToken);
-    return Results.Accepted("/api/monitor/status");
 });
 
 app.MapGet("/api/market-data/status", (
@@ -344,7 +398,7 @@ app.MapGet("/api/market-data/sectors", async (
 {
     var snapshot = await marketDataProvider.LoadMarketSnapshotAsync(cancellationToken);
     var sectorHeatSnapshot = sectorHeatService.Build(snapshot);
-    var takeCount = Math.Clamp(count ?? 20, 1, 80);
+    var takeCount = Math.Clamp(count ?? 20, 1, 5000);
 
     return sectorHeatSnapshot.SectorsByCode.Values
         .OrderByDescending(item => item.HeatScore)
@@ -377,7 +431,7 @@ app.MapGet("/api/market-data/concepts", async (
 {
     var snapshot = await marketDataProvider.LoadMarketSnapshotAsync(cancellationToken);
     var conceptHeatSnapshot = sectorHeatService.BuildConcepts(snapshot);
-    var takeCount = Math.Clamp(count ?? 20, 1, 80);
+    var takeCount = Math.Clamp(count ?? 20, 1, 5000);
 
     return conceptHeatSnapshot.ConceptsByCode.Values
         .OrderByDescending(item => item.HeatScore)
@@ -402,16 +456,6 @@ app.MapGet("/api/market-data/concept-mapping/status", (ISectorHeatService sector
     return sectorHeatService.GetConceptMappingStatus();
 });
 
-app.MapGet("/api/market-data/mapping-update/status", (MarketMappingUpdateService marketMappingUpdateService) =>
-{
-    return marketMappingUpdateService.GetStatus();
-});
-
-app.MapPost("/api/market-data/mapping-update/run", (MarketMappingUpdateService marketMappingUpdateService) =>
-{
-    _ = marketMappingUpdateService.TryStartManualUpdate();
-    return Results.Accepted("/api/market-data/mapping-update/status", marketMappingUpdateService.GetStatus());
-});
 
 app.MapGet("/api/market-sentiment/snapshot", async (
     MarketSentimentService marketSentimentService,
@@ -660,40 +704,51 @@ app.MapGet("/api/history-data/status", (HistoricalDataUpdateService historicalDa
     return historicalDataUpdateService.GetStatus();
 });
 
-app.MapPost("/api/history-data/update-now", (HistoricalDataUpdateService historicalDataUpdateService) =>
+app.MapPost("/api/history-data/update-now", (BackgroundJobService jobService) =>
 {
-    _ = historicalDataUpdateService.TryStartManualUpdate();
-    return Results.Accepted("/api/history-data/status", historicalDataUpdateService.GetStatus());
+    var job = jobService.Enqueue("history-data-update", "历史更新", new { });
+    return Results.Accepted($"/api/jobs/{job.Id}", new CreateBackgroundJobResponse(job.Id));
 });
 
-app.MapGet("/api/qlib-signals/r013/status", (QlibSignalSyncService qlibSignalSyncService) =>
+app.MapGet("/api/jobs/{id:guid}", (Guid id, BackgroundJobService jobService) =>
 {
-    return MapQlibSignalStatus(qlibSignalSyncService.GetStatus());
+    var job = jobService.Get(id);
+    return job is null ? Results.NotFound() : Results.Ok(MapBackgroundJob(job));
 });
 
-app.MapGet("/api/qlib-signals/r013/latest", (QlibSignalSyncService qlibSignalSyncService) =>
+app.MapGet("/api/jobs/latest", (string? type, BackgroundJobService jobService) =>
 {
-    return MapQlibSignalSnapshot(qlibSignalSyncService.GetLatest());
+    var job = jobService.GetLatest(type);
+    return job is null ? Results.NotFound() : Results.Ok(MapBackgroundJob(job));
 });
 
-app.MapGet("/api/qlib-signals/r013/rebalance-plan", (QlibSignalSyncService qlibSignalSyncService) =>
+app.MapGet("/api/jobs/active", (BackgroundJobService jobService) =>
 {
-    return MapQlibSignalSnapshot(qlibSignalSyncService.GetRebalancePlan());
+    return jobService.GetActive().Select(MapBackgroundJob).ToArray();
 });
 
-app.MapGet("/api/qlib-signals/r013/seeds", (
-    DateOnly? signalDate,
-    int? count,
-    QlibSignalSyncService qlibSignalSyncService) =>
+app.MapGet("/api/jobs/{id:guid}/logs", (Guid id, int? count, BackgroundJobService jobService) =>
 {
-    return qlibSignalSyncService.QuerySeeds(signalDate, count)
-        .Select(MapQlibSignalSeed)
-        .ToArray();
+    return jobService.GetLogs(id, count ?? 300).Select(MapBackgroundJobLog).ToArray();
 });
 
-app.MapPost("/api/qlib-signals/r013/import-seeds", (QlibSignalSyncService qlibSignalSyncService) =>
+app.MapPost("/api/jobs/next-day-prediction", (DateOnly? date, BackgroundJobService jobService) =>
 {
-    return MapQlibSignalSeedImportResult(qlibSignalSyncService.ImportLatestSeeds());
+    var signalDate = date ?? DateOnly.FromDateTime(DateTime.Today);
+    var job = jobService.Enqueue("next-day-prediction", $"次日预测 {signalDate:yyyy-MM-dd}", new { SignalDate = signalDate });
+    return Results.Accepted($"/api/jobs/{job.Id}", new CreateBackgroundJobResponse(job.Id));
+});
+
+app.MapPost("/api/jobs/history-data-update", (BackgroundJobService jobService) =>
+{
+    var job = jobService.Enqueue("history-data-update", "历史更新", new { });
+    return Results.Accepted($"/api/jobs/{job.Id}", new CreateBackgroundJobResponse(job.Id));
+});
+
+app.MapPost("/api/jobs/m30-kline-update", (BackgroundJobService jobService) =>
+{
+    var job = jobService.Enqueue("m30-kline-update", "30分钟K更新", new { });
+    return Results.Accepted($"/api/jobs/{job.Id}", new CreateBackgroundJobResponse(job.Id));
 });
 
 app.MapPost("/api/backtest/replay", async (
@@ -725,105 +780,6 @@ app.MapPost("/api/backtest/replay", async (
         result.StrategySummaries.Select(MapBacktestStrategySummary).ToArray(),
         result.Signals.Select(MapBacktestSignal).ToArray(),
         result.SentimentSummaries.Select(MapBacktestSentimentSummary).ToArray());
-});
-
-app.MapPost("/api/strategy-training/dataset", async (
-    StrategyTrainingDatasetRequest request,
-    StrategyTrainingService strategyTrainingService,
-    IMarketDataProvider marketDataProvider,
-    IConfiguration configuration,
-    CancellationToken cancellationToken) =>
-{
-    var dataset = await strategyTrainingService.BuildDatasetAsync(
-        new StrategyTrainingQuery(
-            request.StartDate,
-            request.EndDate,
-            request.StrategyCode,
-            request.SuccessHighReturnThreshold,
-            request.RequirePositiveClose,
-            ForceRebuild: request.ForceRebuild,
-            ScoreThresholds: request.ScoreThresholds,
-            AmountThresholds: request.AmountThresholds,
-            RelativeStrengthThresholds: request.RelativeStrengthThresholds,
-            HeatThresholds: request.HeatThresholds,
-            OutputLimits: request.OutputLimits),
-        cancellationToken);
-    var stockNames = dataset.Samples.Any(item => IsMissingStockName(item.Symbol, item.Name))
-        ? await LoadStockNamesAsync(marketDataProvider, configuration, cancellationToken)
-        : LoadHistoricalStockNames(configuration);
-
-    return MapStrategyTrainingDataset(dataset, stockNames);
-});
-
-app.MapPost("/api/strategy-training/run", async (
-    StrategyTrainingRunRequest request,
-    StrategyTrainingService strategyTrainingService,
-    CancellationToken cancellationToken) =>
-{
-    var run = await strategyTrainingService.RunAsync(
-        new StrategyTrainingQuery(
-            request.StartDate,
-            request.EndDate,
-            request.StrategyCode,
-            request.SuccessHighReturnThreshold,
-            request.RequirePositiveClose,
-            ForceRebuild: request.ForceRebuild,
-            ScoreThresholds: request.ScoreThresholds,
-            AmountThresholds: request.AmountThresholds,
-            RelativeStrengthThresholds: request.RelativeStrengthThresholds,
-            HeatThresholds: request.HeatThresholds,
-            OutputLimits: request.OutputLimits),
-        cancellationToken);
-
-    return MapStrategyTrainingRun(run);
-});
-
-app.MapGet("/api/strategy-parameters", (
-    StrategyParameterProfileService strategyParameterProfileService,
-    string? strategyCode) =>
-{
-    return strategyParameterProfileService.GetProfiles(strategyCode)
-        .Select(MapStrategyParameterProfile)
-        .ToArray();
-});
-
-app.MapPost("/api/strategy-parameters", (
-    SaveStrategyParameterProfileRequest request,
-    StrategyParameterProfileService strategyParameterProfileService) =>
-{
-    var profile = strategyParameterProfileService.SaveProfile(
-        new SaveStrategyParameterProfileCommand(
-            request.StrategyCode,
-            request.ProfileName,
-            request.SourceTrainingRunId,
-            request.MinScore,
-            request.MinAmountYi,
-            request.MinRelativeStrengthPercent,
-            request.MinHeatScore,
-            request.MaxOutputPerDay,
-            request.SampleCount,
-            request.SuccessRate,
-            request.AverageNextHighReturn,
-            request.AverageNextCloseReturn));
-    return Results.Ok(MapStrategyParameterProfile(profile));
-});
-
-app.MapPost("/api/strategy-parameters/{id:guid}/activate", (
-    Guid id,
-    StrategyParameterProfileService strategyParameterProfileService) =>
-{
-    var profile = strategyParameterProfileService.Activate(id);
-    return profile is null
-        ? Results.NotFound()
-        : Results.Ok(MapStrategyParameterProfile(profile));
-});
-
-app.MapPost("/api/strategy-parameters/default", (
-    string strategyCode,
-    StrategyParameterProfileService strategyParameterProfileService) =>
-{
-    strategyParameterProfileService.Deactivate(strategyCode);
-    return Results.NoContent();
 });
 
 app.MapGet("/api/strategies", (IStrategyRegistry strategyRegistry) =>
@@ -890,6 +846,80 @@ app.MapPost("/api/review/predictions/verify", async (
     return MapPredictionReview(
         await predictionReviewService.VerifyAsync(signalDate, cancellationToken),
         LoadHistoricalStockNames(configuration));
+});
+
+app.MapGet("/api/review/long-term-tracking", async (
+    DateOnly? fromDate,
+    DateOnly? toDate,
+    string? symbol,
+    string? strategyCode,
+    string? status,
+    string? sortBy,
+    bool? descending,
+    int? count,
+    LongTermTrackingService longTermTrackingService,
+    IMarketDataProvider marketDataProvider,
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    var snapshot = await marketDataProvider.LoadMarketSnapshotAsync(cancellationToken);
+    var quotes = snapshot.Quotes
+        .GroupBy(item => StockSymbolNormalizer.NormalizeCode(item.Symbol), StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+    var stockNames = MergeStockNames(LoadHistoricalStockNames(configuration), quotes);
+    var result = longTermTrackingService.Query(
+        new LongTermTrackingQuery(
+            fromDate,
+            toDate,
+            symbol,
+            strategyCode,
+            status,
+            string.IsNullOrWhiteSpace(sortBy) ? "LastHitAt" : sortBy,
+            descending ?? true,
+            count ?? 500));
+    return MapLongTermTrackingResult(result, stockNames, quotes);
+});
+
+app.MapPost("/api/review/long-term-tracking/backfill", (
+    LongTermTrackingService longTermTrackingService) =>
+{
+    return MapLongTermTrackingBackfill(longTermTrackingService.Backfill());
+});
+
+app.MapGet("/api/review/long-term-tracking/{symbol}/timeline", (
+    string symbol,
+    int? count,
+    LongTermTrackingService longTermTrackingService,
+    IConfiguration configuration) =>
+{
+    var stockNames = LoadHistoricalStockNames(configuration);
+    return longTermTrackingService.QueryTimeline(symbol, count ?? 200)
+        .Select(item => MapLongTermTrackingTimelineItem(item, stockNames))
+        .ToArray();
+});
+
+app.MapPost("/api/review/long-term-tracking/{id:guid}/status", (
+    Guid id,
+    UpdateLongTermTrackingStatusRequest request,
+    LongTermTrackingService longTermTrackingService,
+    IConfiguration configuration) =>
+{
+    var item = longTermTrackingService.UpdateStatus(id, request.Status);
+    return item is null
+        ? Results.NotFound()
+        : Results.Ok(MapLongTermTrackingItem(item, LoadHistoricalStockNames(configuration), null));
+});
+
+app.MapPost("/api/review/long-term-tracking/{id:guid}/note", (
+    Guid id,
+    UpdateLongTermTrackingNoteRequest request,
+    LongTermTrackingService longTermTrackingService,
+    IConfiguration configuration) =>
+{
+    var item = longTermTrackingService.UpdateNote(id, request.Note);
+    return item is null
+        ? Results.NotFound()
+        : Results.Ok(MapLongTermTrackingItem(item, LoadHistoricalStockNames(configuration), null));
 });
 
 app.MapHub<MonitorHub>("/hubs/monitor");
@@ -962,9 +992,38 @@ static string BuildOpportunityStrategyExplanation(
     }
 
     var reason = string.IsNullOrWhiteSpace(bestHit.Reason) ? "\u6682\u65E0\u89E3\u91CA" : bestHit.Reason.Trim();
-    var risk = string.IsNullOrWhiteSpace(bestHit.Risk) ? string.Empty : $"\uFF1B\u98CE\u9669\uFF1A{bestHit.Risk.Trim()}";
+var risk = string.IsNullOrWhiteSpace(bestHit.Risk) ? string.Empty : $"\uFF1B\u98CE\u9669\uFF1A{bestHit.Risk.Trim()}";
     return $"\u7B56\u7565\u89E3\u91CA\uFF1A{bestHit.StrategyName}\uFF0C{reason}{risk}";
 }
+
+static BackgroundJobDto MapBackgroundJob(AShareRadar.Application.Jobs.BackgroundJob item)
+{
+    return new BackgroundJobDto(
+        item.Id,
+        item.Type,
+        item.Title,
+        item.Status,
+        item.ProgressPercent,
+        item.CurrentStep,
+        item.CreatedAt,
+        item.StartedAt,
+        item.FinishedAt,
+        item.ExitCode,
+        item.ErrorMessage,
+        item.FixSuggestion,
+        item.ResultJson);
+}
+
+static BackgroundJobLogDto MapBackgroundJobLog(AShareRadar.Application.Jobs.BackgroundJobLog item)
+{
+    return new BackgroundJobLogDto(
+        item.Id,
+        item.JobId,
+        item.CreatedAt,
+        item.Stream,
+        item.Message);
+}
+
 static SignalEventDto MapSignalEvent(
     AShareRadar.Domain.Opportunities.SignalEvent item,
     IReadOnlyDictionary<string, string>? stockNames = null)
@@ -1162,7 +1221,9 @@ static KLineBarDto MapKLineBar(KLineBar item)
         item.High,
         item.Low,
         item.Close,
-        item.Volume);
+        item.Volume,
+        item.Amount,
+        item.TurnoverRate);
 }
 
 static HistoricalSignalDto MapHistoricalSignal(
@@ -1246,6 +1307,79 @@ static PredictionRecordDto MapPredictionRecord(
         item.VerifiedAt);
 }
 
+static LongTermTrackingQueryResultDto MapLongTermTrackingResult(
+    LongTermTrackingQueryResult item,
+    IReadOnlyDictionary<string, string>? stockNames = null,
+    IReadOnlyDictionary<string, AShareRadar.Domain.MarketData.StockQuote>? quotes = null)
+{
+    return new LongTermTrackingQueryResultDto(
+        item.TotalCount,
+        item.LastHitAt,
+        item.Items.Select(trackingItem => MapLongTermTrackingItem(trackingItem, stockNames, quotes)).ToArray());
+}
+
+static LongTermTrackingBackfillResultDto MapLongTermTrackingBackfill(LongTermTrackingBackfillResult item)
+{
+    return new LongTermTrackingBackfillResultDto(
+        item.BackfilledAt,
+        item.ItemCount,
+        item.EventCount);
+}
+
+static LongTermTrackingItemDto MapLongTermTrackingItem(
+    LongTermTrackingItem item,
+    IReadOnlyDictionary<string, string>? stockNames = null,
+    IReadOnlyDictionary<string, AShareRadar.Domain.MarketData.StockQuote>? quotes = null)
+{
+    AShareRadar.Domain.MarketData.StockQuote? quote = null;
+    quotes?.TryGetValue(StockSymbolNormalizer.NormalizeCode(item.Symbol), out quote);
+    var hitPrice = item.LatestPrice;
+    var currentPrice = quote?.Price;
+    var returnFromHit = hitPrice is > 0m && currentPrice.HasValue
+        ? (currentPrice.Value - hitPrice.Value) * 100m / hitPrice.Value
+        : (decimal?)null;
+    return new LongTermTrackingItemDto(
+        item.Id,
+        StockSymbolNormalizer.NormalizeCode(item.Symbol),
+        NormalizeStockName(item.Symbol, quote?.Name ?? item.Name, stockNames),
+        item.StrategyCode,
+        item.StrategyName,
+        item.FirstHitAt,
+        item.LastHitAt,
+        item.HitCount,
+        RoundNullable(hitPrice),
+        RoundNullable(currentPrice),
+        RoundNullable(returnFromHit),
+        Math.Round(item.LatestScore, 4),
+        Math.Round(item.BestScore, 4),
+        item.LatestReason,
+        item.LatestRisk,
+        item.Status,
+        item.ManualPriority,
+        item.Note,
+        item.Tags,
+        item.LatestEventId,
+        item.CreatedAt,
+        item.UpdatedAt);
+}
+
+static LongTermTrackingTimelineItemDto MapLongTermTrackingTimelineItem(
+    LongTermTrackingTimelineItem item,
+    IReadOnlyDictionary<string, string>? stockNames = null)
+{
+    return new LongTermTrackingTimelineItemDto(
+        item.EventId,
+        item.EventTime,
+        StockSymbolNormalizer.NormalizeCode(item.Symbol),
+        NormalizeStockName(item.Symbol, item.Name, stockNames),
+        item.StrategyCode,
+        item.StrategyName,
+        Math.Round(item.Score, 4),
+        RoundNullable(item.Price),
+        item.Reason,
+        item.Risk);
+}
+
 static IndicatorPointDto MapIndicatorPoint(IndicatorPoint item)
 {
     return new IndicatorPointDto(
@@ -1290,183 +1424,6 @@ static BacktestSignalDto MapBacktestSignal(BacktestSignalItem item)
         item.FailedConditions,
         item.StopLossPrice,
         item.TakeProfitPrice);
-}
-
-static QlibSignalStatusDto MapQlibSignalStatus(QlibSignalStatus item)
-{
-    return new QlibSignalStatusDto(
-        item.Enabled,
-        item.FileExists,
-        item.SignalRoot,
-        item.WatchlistPath,
-        item.SignalDate,
-        item.RecordCount,
-        item.LastWriteTime,
-        item.Error);
-}
-
-static QlibSignalSnapshotDto MapQlibSignalSnapshot(QlibSignalSnapshot item)
-{
-    return new QlibSignalSnapshotDto(
-        item.StrategyCode,
-        item.StrategyName,
-        item.SourceExperimentId,
-        item.SignalDate,
-        item.LoadedAt,
-        item.Records.Select(MapQlibSignalRecord).ToArray());
-}
-
-static QlibSignalRecordDto MapQlibSignalRecord(QlibSignalRecord item)
-{
-    return new QlibSignalRecordDto(
-        item.SignalDate,
-        item.Code,
-        item.Symbol,
-        item.Exchange,
-        item.Name,
-        item.PredScore,
-        item.RankTotal,
-        item.ModelRank,
-        item.ModelScore100,
-        item.TargetWeight,
-        item.Action,
-        item.Confidence,
-        item.StrategyCode,
-        item.StrategyName,
-        item.SourceExperimentId,
-        item.Reason,
-        item.Risk);
-}
-
-static QlibSignalSeedImportResultDto MapQlibSignalSeedImportResult(QlibSignalSeedImportResult item)
-{
-    return new QlibSignalSeedImportResultDto(
-        item.ImportedAt,
-        item.SignalDate,
-        item.StrategyCode,
-        item.StrategyName,
-        item.SourceExperimentId,
-        item.ImportedCount,
-        item.Seeds.Select(MapQlibSignalSeed).ToArray());
-}
-
-static QlibSignalSeedDto MapQlibSignalSeed(QlibSignalSeed item)
-{
-    return new QlibSignalSeedDto(
-        item.Id,
-        item.SignalDate,
-        item.Code,
-        item.Symbol,
-        item.Exchange,
-        item.Name,
-        item.PredScore,
-        item.RankTotal,
-        item.ModelRank,
-        item.ModelScore100,
-        item.TargetWeight,
-        item.Action,
-        item.Confidence,
-        item.StrategyCode,
-        item.StrategyName,
-        item.SourceExperimentId,
-        item.Reason,
-        item.Risk,
-        item.ImportedAt);
-}
-
-static StrategyTrainingDatasetDto MapStrategyTrainingDataset(
-    StrategyTrainingDataset item,
-    IReadOnlyDictionary<string, string>? stockNames = null)
-{
-    return new StrategyTrainingDatasetDto(
-        item.StartDate,
-        item.EndDate,
-        item.StrategyCode,
-        item.SourceSignalCount,
-        item.SampleCount,
-        item.SuccessCount,
-        RoundNullable(item.SuccessRate),
-        item.Message,
-        item.Samples.Select(sample => MapStrategyTrainingSample(sample, stockNames)).ToArray());
-}
-
-static StrategyTrainingSampleDto MapStrategyTrainingSample(
-    StrategyTrainingSample item,
-    IReadOnlyDictionary<string, string>? stockNames = null)
-{
-    return new StrategyTrainingSampleDto(
-        item.Id,
-        item.SignalDate,
-        StockSymbolNormalizer.NormalizeCode(item.Symbol),
-        NormalizeStockName(item.Symbol, item.Name, stockNames),
-        item.StrategyCode,
-        item.StrategyName,
-        Math.Round(item.Score, 4),
-        RoundNullable(item.Price),
-        RoundNullable(item.AmountYi),
-        RoundNullable(item.ChangePercent),
-        RoundNullable(item.VolumeRatio),
-        RoundNullable(item.RelativeStrengthPercent),
-        RoundNullable(item.SectorHeatScore),
-        RoundNullable(item.ConceptHeatScore),
-        RoundNullable(item.SentimentTemperature),
-        RoundNullable(item.NextOpenReturn),
-        RoundNullable(item.NextHighReturn),
-        RoundNullable(item.NextCloseReturn),
-        item.IsSuccess,
-        item.Reason,
-        item.Metrics);
-}
-
-static StrategyTrainingRunDto MapStrategyTrainingRun(StrategyTrainingRun item)
-{
-    return new StrategyTrainingRunDto(
-        item.RunId,
-        item.StartDate,
-        item.EndDate,
-        item.StrategyCode,
-        item.SourceSignalCount,
-        item.SampleCount,
-        item.ResultCount,
-        item.CreatedAt,
-        item.Message,
-        item.Results.Select(MapStrategyTrainingResult).ToArray());
-}
-
-static StrategyTrainingResultDto MapStrategyTrainingResult(StrategyTrainingResult item)
-{
-    return new StrategyTrainingResultDto(
-        item.Rank,
-        Math.Round(item.MinScore, 4),
-        Math.Round(item.MinAmountYi, 4),
-        Math.Round(item.MinRelativeStrengthPercent, 4),
-        Math.Round(item.MinHeatScore, 4),
-        item.MaxOutputPerDay,
-        item.HitCount,
-        item.SuccessCount,
-        RoundNullable(item.SuccessRate),
-        RoundNullable(item.AverageNextOpenReturn),
-        RoundNullable(item.AverageNextHighReturn),
-        RoundNullable(item.AverageNextCloseReturn),
-        RoundNullable(item.WorstNextCloseReturn),
-        item.Summary);
-}
-
-static StrategyParameterProfileDto MapStrategyParameterProfile(StrategyParameterProfile item)
-{
-    return new StrategyParameterProfileDto(
-        item.Id,
-        item.StrategyCode,
-        item.ProfileName,
-        item.SourceTrainingRunId,
-        item.Parameters,
-        item.SampleCount,
-        RoundNullable(item.SuccessRate),
-        RoundNullable(item.AverageNextHighReturn),
-        RoundNullable(item.AverageNextCloseReturn),
-        item.IsActive,
-        item.CreatedAt,
-        item.ActivatedAt);
 }
 
 static BacktestStrategySummaryDto MapBacktestStrategySummary(BacktestStrategySummaryItem item)
@@ -1584,6 +1541,28 @@ static async Task<IReadOnlyDictionary<string, string>> LoadRealtimeStockNamesAsy
     {
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     }
+}
+
+static IReadOnlyDictionary<string, string> MergeStockNames(
+    IReadOnlyDictionary<string, string> historicalNames,
+    IReadOnlyDictionary<string, AShareRadar.Domain.MarketData.StockQuote> quotes)
+{
+    var names = new Dictionary<string, string>(historicalNames, StringComparer.OrdinalIgnoreCase);
+    foreach (var quote in quotes.Values)
+    {
+        var symbol = StockSymbolNormalizer.NormalizeCode(quote.Symbol);
+        if (symbol.Length == 0 || IsMissingStockName(symbol, quote.Name))
+        {
+            continue;
+        }
+
+        if (!names.TryGetValue(symbol, out var existing) || IsMissingStockName(symbol, existing))
+        {
+            names[symbol] = quote.Name.Trim();
+        }
+    }
+
+    return names;
 }
 
 static bool IsMissingStockName(string symbol, string? currentName)

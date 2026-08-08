@@ -1,8 +1,8 @@
 using AShareRadar.Application.MarketData;
 using AShareRadar.Application.Opportunities;
 using AShareRadar.Application.Realtime;
+using AShareRadar.Application.Review;
 using AShareRadar.Application.Strategies;
-using AShareRadar.Application.StrategyTraining;
 using AShareRadar.Domain.MarketData;
 using AShareRadar.Domain.Opportunities;
 using AShareRadar.Domain.Strategies;
@@ -11,8 +11,9 @@ namespace AShareRadar.Application.Monitoring;
 
 public sealed class ScanOrchestrator
 {
-    private const int MomentumCandidateCount = 120;
-    private const int ReboundCandidateCount = 240;
+    private const int MomentumCandidateCount = 260;
+    private const int ReboundCandidateCount = 740;
+    private const int LongTermTrackingCandidateCount = 200;
     private const int MinDailyBarLoadCount = 80;
     private const int WeeklyBarLoadCount = 120;
     private const int MinuteKLineMaxCandidateCount = 600;
@@ -22,10 +23,12 @@ public sealed class ScanOrchestrator
     private const int MinuteHotSectorCandidateCount = 120;
     private const int MinuteRescanCandidateCount = 80;
     private const int MinuteBarLoadCount = 360;
+    private const int ThirtyMinuteBarLoadCount = 100;
     private const int MaxKLineLoadConcurrency = 8;
 
     private readonly object _scanGate = new();
     private Task? _runningScanTask;
+    private DateTimeOffset? _lastObservationPoolScanTime;
 
     private readonly IMarketDataProvider _marketDataProvider;
     private readonly IKLineDataProvider _kLineDataProvider;
@@ -36,7 +39,8 @@ public sealed class ScanOrchestrator
     private readonly ISectorHeatService _sectorHeatService;
     private readonly MarketSentimentService _marketSentimentService;
     private readonly MarketSentimentStrategyOptions _marketSentimentStrategyOptions;
-    private readonly StrategyParameterProfileService _strategyParameterProfileService;
+    private readonly StrategyPoolScanOptions _strategyPoolScanOptions;
+    private readonly LongTermTrackingService _longTermTrackingService;
     private readonly DailyLimitUpExclusionService _limitUpExclusionService;
 
     public ScanOrchestrator(
@@ -49,7 +53,8 @@ public sealed class ScanOrchestrator
         ISectorHeatService sectorHeatService,
         MarketSentimentService marketSentimentService,
         MarketSentimentStrategyOptions marketSentimentStrategyOptions,
-        StrategyParameterProfileService strategyParameterProfileService,
+        StrategyPoolScanOptions strategyPoolScanOptions,
+        LongTermTrackingService longTermTrackingService,
         DailyLimitUpExclusionService limitUpExclusionService)
     {
         _marketDataProvider = marketDataProvider;
@@ -61,7 +66,8 @@ public sealed class ScanOrchestrator
         _sectorHeatService = sectorHeatService;
         _marketSentimentService = marketSentimentService;
         _marketSentimentStrategyOptions = marketSentimentStrategyOptions;
-        _strategyParameterProfileService = strategyParameterProfileService;
+        _strategyPoolScanOptions = strategyPoolScanOptions;
+        _longTermTrackingService = longTermTrackingService;
         _limitUpExclusionService = limitUpExclusionService;
     }
 
@@ -111,24 +117,51 @@ public sealed class ScanOrchestrator
         MarkExistingHitsThatReachedLimitUp(snapshot, tradingDate);
         var strategySnapshot = FilterLimitUpExcludedQuotes(snapshot, tradingDate);
         var strategies = _strategyRegistry.GetEnabledStrategies();
+        var realtimeStrategies = strategies
+            .Where(IsRealtimePoolStrategy)
+            .ToArray();
+        var shouldRunObservationPool = ShouldRunObservationPool(snapshot.SnapshotTime);
+        var observationStrategies = shouldRunObservationPool
+            ? strategies.Where(strategy => !IsRealtimePoolStrategy(strategy)).ToArray()
+            : Array.Empty<ISignalStrategy>();
+        var activeStrategies = realtimeStrategies
+            .Concat(observationStrategies)
+            .ToArray();
+        if (activeStrategies.Length == 0)
+        {
+            _runtimeState.ApplyScanResult(
+                snapshot.SnapshotTime,
+                activeOpportunityCount: 0,
+                todayNewCount: 0,
+                disappearedCount: 0,
+                focusedCount: 0);
+            await _realtimeEventPublisher.PublishMonitorStatusChangedAsync(_runtimeState.GetStatus(), cancellationToken);
+            return;
+        }
+
         var sectorHeatSnapshot = _sectorHeatService.Build(snapshot);
         var conceptHeatSnapshot = _sectorHeatService.BuildConcepts(snapshot);
         var marketSentimentTask = GetUsableMarketSentimentAsync(snapshot.SnapshotTime, cancellationToken);
-        var dailyBarsTask = LoadDailyBarsForCandidatesAsync(strategySnapshot, strategies, cancellationToken);
-        var weeklyBarsTask = LoadWeeklyBarsForCandidatesAsync(strategySnapshot, strategies, cancellationToken);
+        var dailyBarsTask = LoadDailyBarsForCandidatesAsync(strategySnapshot, activeStrategies, cancellationToken);
+        var weeklyBarsTask = LoadWeeklyBarsForCandidatesAsync(strategySnapshot, activeStrategies, cancellationToken);
         var minuteBarsTask = LoadMinuteBarsForCandidatesAsync(
             strategySnapshot,
-            strategies,
+            activeStrategies,
             tradingDate,
             sectorHeatSnapshot,
             conceptHeatSnapshot,
             cancellationToken);
-        await Task.WhenAll(marketSentimentTask, dailyBarsTask, weeklyBarsTask, minuteBarsTask);
+        var thirtyMinuteBarsTask = LoadThirtyMinuteBarsForWaveCandidatesAsync(
+            strategySnapshot,
+            activeStrategies,
+            cancellationToken);
+        await Task.WhenAll(marketSentimentTask, dailyBarsTask, weeklyBarsTask, minuteBarsTask, thirtyMinuteBarsTask);
 
         var marketSentiment = await marketSentimentTask;
         var dailyBarsBySymbol = await dailyBarsTask;
         var weeklyBarsBySymbol = await weeklyBarsTask;
         var minuteBarsBySymbol = await minuteBarsTask;
+        var thirtyMinuteBarsBySymbol = await thirtyMinuteBarsTask;
         var context = new StrategyContext(
             runId,
             tradingDate,
@@ -136,18 +169,30 @@ public sealed class ScanOrchestrator
             DailyBarsBySymbol: dailyBarsBySymbol,
             WeeklyBarsBySymbol: weeklyBarsBySymbol,
             MinuteBarsBySymbol: minuteBarsBySymbol,
+            ThirtyMinuteBarsBySymbol: thirtyMinuteBarsBySymbol,
             SectorHeatSnapshot: sectorHeatSnapshot,
             ConceptHeatSnapshot: conceptHeatSnapshot,
             MarketSentiment: marketSentiment,
             MarketStats: BuildMarketStats(snapshot));
 
-        var strategyTasks = strategies.Select(strategy =>
-            strategy.EvaluateAsync(
-                context with { Parameters = _strategyParameterProfileService.GetActiveParameters(strategy.Code) },
-                cancellationToken));
-        var signalGroups = await Task.WhenAll(strategyTasks);
+        var realtimeSignalTask = EvaluateStrategiesAsync(
+            realtimeStrategies,
+            context with { RunMode = StrategyRunMode.Realtime },
+            "实时池",
+            cancellationToken);
+        var observationSignalTask = EvaluateStrategiesAsync(
+            observationStrategies,
+            context with { RunMode = StrategyRunMode.Observation },
+            "观察池",
+            cancellationToken);
+        await Task.WhenAll(realtimeSignalTask, observationSignalTask);
+        if (shouldRunObservationPool)
+        {
+            _lastObservationPoolScanTime = snapshot.SnapshotTime;
+        }
+
         var strategySignals = MarketSentimentSignalAdjuster.Apply(
-            signalGroups.SelectMany(item => item),
+            (await realtimeSignalTask).Concat(await observationSignalTask),
             marketSentiment,
             _marketSentimentStrategyOptions);
 
@@ -156,6 +201,7 @@ public sealed class ScanOrchestrator
             context.TradingDate,
             snapshot.SnapshotTime,
             strategySignals);
+        _longTermTrackingService.TrackSignalEvents(signalEvents);
 
         foreach (var signalEvent in signalEvents)
         {
@@ -176,6 +222,72 @@ public sealed class ScanOrchestrator
                 string.Equals(item.ManualTag, "Focus", StringComparison.OrdinalIgnoreCase)));
 
         await _realtimeEventPublisher.PublishMonitorStatusChangedAsync(_runtimeState.GetStatus(), cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<StrategySignal>> EvaluateStrategiesAsync(
+        IReadOnlyList<ISignalStrategy> strategies,
+        StrategyContext context,
+        string poolTag,
+        CancellationToken cancellationToken)
+    {
+        if (strategies.Count == 0)
+        {
+            return [];
+        }
+
+        var strategyTasks = strategies.Select(strategy =>
+            strategy.EvaluateAsync(
+                context,
+                cancellationToken));
+        var signalGroups = await Task.WhenAll(strategyTasks);
+        return signalGroups
+            .SelectMany(item => item)
+            .Select(signal => AddPoolTag(signal, poolTag))
+            .ToArray();
+    }
+
+    private bool IsRealtimePoolStrategy(ISignalStrategy strategy)
+    {
+        if (!_strategyPoolScanOptions.Enabled)
+        {
+            return true;
+        }
+
+        var realtimeCodes = _strategyPoolScanOptions.RealtimeStrategyCodes is { Length: > 0 }
+            ? _strategyPoolScanOptions.RealtimeStrategyCodes
+            : ["main-sector-resonance", "main-sector-gap-recovery"];
+        return realtimeCodes.Any(code => string.Equals(code, strategy.Code, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool ShouldRunObservationPool(DateTimeOffset snapshotTime)
+    {
+        if (!_strategyPoolScanOptions.Enabled)
+        {
+            return false;
+        }
+
+        if (_lastObservationPoolScanTime is null)
+        {
+            if (_strategyPoolScanOptions.RunObservationOnStartup)
+            {
+                return true;
+            }
+
+            _lastObservationPoolScanTime = snapshotTime;
+            return false;
+        }
+
+        var interval = TimeSpan.FromSeconds(Math.Clamp(_strategyPoolScanOptions.ObservationIntervalSeconds, 60, 1800));
+        return snapshotTime - _lastObservationPoolScanTime >= interval;
+    }
+
+    private static StrategySignal AddPoolTag(StrategySignal signal, string poolTag)
+    {
+        var tags = (signal.Tags ?? [])
+            .Concat([poolTag])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return signal with { Tags = tags };
     }
 
     private void MarkExistingHitsThatReachedLimitUp(MarketSnapshot snapshot, DateOnly tradingDate)
@@ -342,10 +454,66 @@ public sealed class ScanOrchestrator
         return results;
     }
 
-    private static string[] BuildDailyKLineCandidateSymbols(Domain.MarketData.MarketSnapshot snapshot)
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>> LoadThirtyMinuteBarsForWaveCandidatesAsync(
+        Domain.MarketData.MarketSnapshot snapshot,
+        IReadOnlyList<ISignalStrategy> strategies,
+        CancellationToken cancellationToken)
+    {
+        var requiresThirtyMinuteBars = strategies
+            .Any(item => string.Equals(item.Code, "long-support-rebound", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(item.Code, "platform-volume-breakout", StringComparison.OrdinalIgnoreCase));
+        if (!requiresThirtyMinuteBars)
+        {
+            return new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var candidateSymbols = BuildDailyKLineCandidateSymbols(snapshot);
+        if (candidateSymbols.Length == 0)
+        {
+            return new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (_kLineDataProvider is IBatchKLineDataProvider batchProvider)
+        {
+            return await batchProvider.LoadKLinesAsync(candidateSymbols, "m30", ThirtyMinuteBarLoadCount, cancellationToken);
+        }
+
+        var results = new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase);
+        using var throttler = new SemaphoreSlim(MaxKLineLoadConcurrency);
+        var tasks = candidateSymbols.Select(async symbol =>
+        {
+            await throttler.WaitAsync(cancellationToken);
+            try
+            {
+                var bars = await _kLineDataProvider.LoadKLineAsync(symbol, "m30", ThirtyMinuteBarLoadCount, cancellationToken);
+                if (bars.Count > 0)
+                {
+                    lock (results)
+                    {
+                        results[symbol] = bars;
+                    }
+                }
+            }
+            finally
+            {
+                throttler.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        return results;
+    }
+
+    private string[] BuildDailyKLineCandidateSymbols(Domain.MarketData.MarketSnapshot snapshot)
     {
         var liquidQuotes = snapshot.Quotes
             .Where(item => item.Price > 0 && item.Amount >= 30_000_000m)
+            .ToArray();
+        var quoteSymbols = snapshot.Quotes
+            .Select(item => StockSymbolNormalizer.NormalizeCode(item.Symbol))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var trackingSymbols = _longTermTrackingService.GetActiveTrackingSymbols(LongTermTrackingCandidateCount)
+            .Where(item => quoteSymbols.Contains(StockSymbolNormalizer.NormalizeCode(item)))
             .ToArray();
 
         var momentumSymbols = liquidQuotes
@@ -367,7 +535,8 @@ public sealed class ScanOrchestrator
             .Take(ReboundCandidateCount)
             .Select(item => item.Symbol);
 
-        return momentumSymbols
+        return trackingSymbols
+            .Concat(momentumSymbols)
             .Concat(reboundSymbols)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -614,17 +783,20 @@ public sealed class ScanOrchestrator
 
     private static StrategyMarketStats BuildMarketStats(Domain.MarketData.MarketSnapshot snapshot)
     {
-        if (snapshot.Quotes.Count == 0)
+        var validQuotes = snapshot.Quotes
+            .Where(item => item.Price > 0 && Math.Abs(item.ChangePercent) <= 30m)
+            .ToArray();
+        if (validQuotes.Length == 0)
         {
             return new StrategyMarketStats(0m, 0m, 0m, 0m);
         }
 
-        var risingCount = snapshot.Quotes.Count(item => item.ChangePercent > 0);
-        var fallingCount = snapshot.Quotes.Count(item => item.ChangePercent < 0);
+        var risingCount = validQuotes.Count(item => item.ChangePercent > 0);
+        var fallingCount = validQuotes.Count(item => item.ChangePercent < 0);
         return new StrategyMarketStats(
-            snapshot.Quotes.Average(item => item.ChangePercent),
-            risingCount * 100m / snapshot.Quotes.Count,
-            fallingCount * 100m / snapshot.Quotes.Count,
-            snapshot.Quotes.Sum(item => item.Amount));
+            Math.Clamp(validQuotes.Average(item => item.ChangePercent), -10m, 10m),
+            risingCount * 100m / validQuotes.Length,
+            fallingCount * 100m / validQuotes.Length,
+            validQuotes.Sum(item => item.Amount));
     }
 }

@@ -25,7 +25,7 @@ public sealed class TradingSessionService
 
         var time = TimeOnly.FromDateTime(now.LocalDateTime);
         var callAuctionStart = ParseTime(_options.CallAuctionStartTime, new TimeOnly(9, 15));
-        var morningStart = ParseTime(_options.MorningStartTime, new TimeOnly(9, 30));
+        var morningStart = ParseTime(_options.MorningStartTime, new TimeOnly(9, 25));
         var morningEnd = ParseTime(_options.MorningEndTime, new TimeOnly(11, 30));
         var afternoonStart = ParseTime(_options.AfternoonStartTime, new TimeOnly(13, 0));
         var afternoonEnd = ParseTime(_options.AfternoonEndTime, new TimeOnly(15, 0));

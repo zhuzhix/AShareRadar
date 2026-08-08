@@ -14,6 +14,8 @@ internal static class StrategiesSmoke
         EmptyRegistryShouldReturnNoStrategies();
         await MainSectorResonanceShouldConfirmEarlyIntradayBreakoutAsync();
         await MainSectorResonanceShouldFindGapDownRecoveryAsync();
+        await MainSectorGapRecoveryShouldAcceptGrowthBoardGapWithinLimitAsync();
+        await MainSectorGapRecoveryShouldRejectTooDeepGrowthBoardGapAsync();
         await MainSectorResonanceShouldRequireMinuteBarsAsync();
         await MainSectorResonanceShouldRejectDeepIntradayPullbackAsync();
         await PlatformVolumeBreakoutShouldUseDailyStructureAsync();
@@ -66,7 +68,7 @@ internal static class StrategiesSmoke
     private static async Task MainSectorResonanceShouldFindGapDownRecoveryAsync()
     {
         var strategy = MainSectorResonanceStrategy.CreateGapRecovery();
-        var quote = Quote("300012", 9.85m, -1.5m, 1.6m, 180_000_000m);
+        var quote = Quote("600012", 9.85m, -1.5m, 1.6m, 180_000_000m);
         var context = BuildMainSectorContext(quote, MainSectorGapRecoveryMinuteBars());
 
         var signal = RequireSignal(await strategy.EvaluateAsync(context, CancellationToken.None), "main-sector-gap-recovery", "open_gap_percent");
@@ -78,6 +80,30 @@ internal static class StrategiesSmoke
         if (signal.Metrics?["main_sector_branch"] != 2m)
         {
             throw new InvalidOperationException("Main sector gap recovery should be marked as branch 2.");
+        }
+    }
+
+    private static async Task MainSectorGapRecoveryShouldAcceptGrowthBoardGapWithinLimitAsync()
+    {
+        var strategy = MainSectorResonanceStrategy.CreateGapRecovery();
+        var quote = Quote("300012", 9.85m, -1.5m, 1.6m, 180_000_000m);
+        var context = BuildMainSectorContext(quote, MainSectorGapRecoveryMinuteBars());
+
+        if ((await strategy.EvaluateAsync(context, CancellationToken.None)).Count == 0)
+        {
+            throw new InvalidOperationException("Growth board gap recovery should accept an opening gap within the configured limit.");
+        }
+    }
+
+    private static async Task MainSectorGapRecoveryShouldRejectTooDeepGrowthBoardGapAsync()
+    {
+        var strategy = MainSectorResonanceStrategy.CreateGapRecovery();
+        var quote = Quote("300012", 9.85m, -1.5m, 1.6m, 180_000_000m);
+        var context = BuildMainSectorContext(quote, MainSectorGapRecoveryMinuteBars(open: 9.20m));
+
+        if ((await strategy.EvaluateAsync(context, CancellationToken.None)).Count != 0)
+        {
+            throw new InvalidOperationException("Growth board gap recovery should reject an opening gap deeper than the configured limit.");
         }
     }
 
@@ -380,7 +406,7 @@ internal static class StrategiesSmoke
             .ToArray();
     }
 
-    private static KLineBar[] MainSectorGapRecoveryMinuteBars()
+    private static KLineBar[] MainSectorGapRecoveryMinuteBars(decimal open = 9.70m)
     {
         return Enumerable.Range(0, 30)
             .Select(index =>
@@ -391,7 +417,7 @@ internal static class StrategiesSmoke
                 var volume = index < 25 ? 400_000m : 2_400_000m;
                 return new KLineBar(
                     DateTime.Today.AddHours(9).AddMinutes(30 + index),
-                    Open: index == 0 ? 9.70m : close - 0.01m,
+                    Open: index == 0 ? open : close - 0.01m,
                     High: close + 0.04m,
                     Low: close - 0.05m,
                     Close: close,

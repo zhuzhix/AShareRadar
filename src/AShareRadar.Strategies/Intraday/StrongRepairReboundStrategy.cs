@@ -133,7 +133,7 @@ public sealed class StrongRepairReboundStrategy : ISignalStrategy
             Code,
             Name,
             Type,
-            score,
+            Math.Clamp(score, 0m, 100m),
             quote.Price,
             $"盘中低点较昨收 {intradayDrawdownPercent:F1}%，当前自低点修复 {repairFromLowPercent:F1}%，重新站上开盘价 {priceAboveOpenPercent:F1}%，量比 {quote.VolumeRatio:F2}。",
             BuildRisk(trendStrengthPercent, priceAboveMa20Percent, upperShadowPercent),

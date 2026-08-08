@@ -20,12 +20,13 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
     private const decimal ConfirmVolumeAccel = 1.5m;
     private const decimal MinFiveMinuteReturn = 0.3m;
     private const decimal PlatformBreakoutPercent = 0.3m;
-    private const decimal GapRecoveryMinOpenGapDown = -1.0m;
-    private const decimal GapRecoveryMinReturnFromOpen = 0.8m;
+    private const decimal GapRecoveryMainBoardMinOpenGapDown = -2.0m;
+    private const decimal GapRecoveryGrowthBoardMinOpenGapDown = -7.0m;
+    private const decimal GapRecoveryMinReturnFromOpen = 2.0m;
     private const decimal GapRecoveryMaxChangePercent = 3.5m;
-    private const decimal GapRecoveryMinVwapRatio = 99.5m;
+    private const decimal GapRecoveryMinVwapRatio = 101.0m;
     private const decimal GapRecoveryMaxDrawdownFromHigh = 1.8m;
-    private const decimal GapRecoveryMinVolumeAccel = 1.2m;
+    private const decimal GapRecoveryMinVolumeAccel = 1.5m;
     private const decimal GapRecoveryMinHeatScore = 45m;
     private const int MaxResultCount = 20;
     private const int ConceptLeaderRankThreshold = 5;
@@ -81,7 +82,8 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
             ["confirm_volume_accel"] = ConfirmVolumeAccel.ToString("F2", CultureInfo.InvariantCulture),
             ["min_5m_return"] = MinFiveMinuteReturn.ToString("F1", CultureInfo.InvariantCulture),
             ["platform_breakout_percent"] = PlatformBreakoutPercent.ToString("F1", CultureInfo.InvariantCulture),
-            ["gap_recovery_min_open_gap_down"] = GapRecoveryMinOpenGapDown.ToString("F1", CultureInfo.InvariantCulture),
+            ["gap_recovery_main_board_min_open_gap_down"] = GapRecoveryMainBoardMinOpenGapDown.ToString("F1", CultureInfo.InvariantCulture),
+            ["gap_recovery_growth_board_min_open_gap_down"] = GapRecoveryGrowthBoardMinOpenGapDown.ToString("F1", CultureInfo.InvariantCulture),
             ["gap_recovery_min_return_from_open"] = GapRecoveryMinReturnFromOpen.ToString("F1", CultureInfo.InvariantCulture),
             ["gap_recovery_max_change_percent"] = GapRecoveryMaxChangePercent.ToString("F1", CultureInfo.InvariantCulture),
             ["gap_recovery_min_vwap_ratio"] = GapRecoveryMinVwapRatio.ToString("F1", CultureInfo.InvariantCulture),
@@ -182,7 +184,8 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
         var confirmVolumeAccel = GetDecimalParameter(context, "confirm_volume_accel", ConfirmVolumeAccel);
         var minFiveMinuteReturn = GetDecimalParameter(context, "min_5m_return", MinFiveMinuteReturn);
         var platformBreakoutPercent = GetDecimalParameter(context, "platform_breakout_percent", PlatformBreakoutPercent);
-        var gapRecoveryMinOpenGapDown = GetDecimalParameter(context, "gap_recovery_min_open_gap_down", GapRecoveryMinOpenGapDown);
+        var gapRecoveryMainBoardMinOpenGapDown = GetDecimalParameter(context, "gap_recovery_main_board_min_open_gap_down", GapRecoveryMainBoardMinOpenGapDown);
+        var gapRecoveryGrowthBoardMinOpenGapDown = GetDecimalParameter(context, "gap_recovery_growth_board_min_open_gap_down", GapRecoveryGrowthBoardMinOpenGapDown);
         var gapRecoveryMinReturnFromOpen = GetDecimalParameter(context, "gap_recovery_min_return_from_open", GapRecoveryMinReturnFromOpen);
         var gapRecoveryMaxChangePercent = GetDecimalParameter(context, "gap_recovery_max_change_percent", GapRecoveryMaxChangePercent);
         var gapRecoveryMinVwapRatio = GetDecimalParameter(context, "gap_recovery_min_vwap_ratio", GapRecoveryMinVwapRatio);
@@ -191,6 +194,10 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
         var gapRecoveryMinHeatScore = GetDecimalParameter(context, "gap_recovery_min_heat_score", GapRecoveryMinHeatScore);
         var previousClose = EstimatePreviousClose(currentPrice, quote.ChangePercent);
         var openGapPercent = previousClose > 0 ? Percent(dayOpen, previousClose) : 0m;
+        var gapRecoveryMinOpenGapDown = ResolveGapRecoveryMinOpenGapDown(
+            quote.Symbol,
+            gapRecoveryMainBoardMinOpenGapDown,
+            gapRecoveryGrowthBoardMinOpenGapDown);
         var vwapRatio = currentPrice * 100m / vwap;
         var hasRegularHeat = effectiveHeatScore >= minHeatScore || quote.ChangePercent >= marketAverageChange + 0.6m;
         var canUseRegularBranch = hasRegularHeat
@@ -207,7 +214,8 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
             && volumeAccel >= confirmVolumeAccel
             && platformBreakout >= platformBreakoutPercent
             && fiveMinuteReturn >= minFiveMinuteReturn;
-        var isGapRecovery = openGapPercent <= gapRecoveryMinOpenGapDown
+        var isGapRecovery = openGapPercent < 0m
+            && openGapPercent >= gapRecoveryMinOpenGapDown
             && returnFromOpen >= gapRecoveryMinReturnFromOpen
             && quote.ChangePercent <= gapRecoveryMaxChangePercent
             && vwapRatio >= gapRecoveryMinVwapRatio
@@ -301,6 +309,8 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
             ["return_5m"] = fiveMinuteReturn,
             ["platform_breakout_percent"] = platformBreakout,
             ["gap_recovery_min_open_gap_down"] = gapRecoveryMinOpenGapDown,
+            ["gap_recovery_main_board_min_open_gap_down"] = gapRecoveryMainBoardMinOpenGapDown,
+            ["gap_recovery_growth_board_min_open_gap_down"] = gapRecoveryGrowthBoardMinOpenGapDown,
             ["gap_recovery_min_return_from_open"] = gapRecoveryMinReturnFromOpen,
             ["gap_recovery_min_vwap_ratio"] = gapRecoveryMinVwapRatio
         };
@@ -351,7 +361,7 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
             $"成交额 {quote.Amount / 100_000_000m:F1} 亿 >= {minAmount / 100_000_000m:F1} 亿",
             isGapRecovery ? $"价格/VWAP {vwapRatio:F1}% >= {gapRecoveryMinVwapRatio:F1}%" : $"分时价 {currentPrice:F2} >= VWAP {vwap:F2}",
             $"量能加速 {volumeAccel:F2} >= {(isGapRecovery && !isCandidate && !isConfirm ? gapRecoveryMinVolumeAccel : isConfirm ? confirmVolumeAccel : candidateVolumeAccel):F2}",
-            isGapRecovery ? $"低开 {openGapPercent:F2}% <= {gapRecoveryMinOpenGapDown:F2}%" : $"分时高位占比 {highPosition:F1}% <= {(isConfirm ? confirmHighLimit : candidateHighLimit):F1}%",
+            isGapRecovery ? $"低开 {openGapPercent:F2}% 在 {gapRecoveryMinOpenGapDown:F2}% 到 0.00% 区间" : $"分时高位占比 {highPosition:F1}% <= {(isConfirm ? confirmHighLimit : candidateHighLimit):F1}%",
             $"高点回落 {drawdownFromHigh:F2}% <= {(isGapRecovery && !isCandidate && !isConfirm ? gapRecoveryMaxDrawdownFromHigh : maxDrawdownFromHigh):F2}%",
             $"板块/概念有效热度 {effectiveHeatScore:F1}"
         };
@@ -424,6 +434,32 @@ public sealed class MainSectorResonanceStrategy : ISignalStrategy
 
         var turnover = bars.Sum(item => ((item.High + item.Low + item.Close) / 3m) * item.Volume);
         return turnover / totalVolume;
+    }
+
+    private static decimal ResolveGapRecoveryMinOpenGapDown(
+        string symbol,
+        decimal mainBoardMinOpenGapDown,
+        decimal growthBoardMinOpenGapDown)
+    {
+        return IsGrowthOrStarMarket(symbol)
+            ? growthBoardMinOpenGapDown
+            : mainBoardMinOpenGapDown;
+    }
+
+    private static bool IsGrowthOrStarMarket(string symbol)
+    {
+        var code = ExtractSymbolCode(symbol);
+        return code.StartsWith("300", StringComparison.Ordinal)
+            || code.StartsWith("301", StringComparison.Ordinal)
+            || code.StartsWith("688", StringComparison.Ordinal)
+            || code.StartsWith("689", StringComparison.Ordinal);
+    }
+
+    private static string ExtractSymbolCode(string symbol)
+    {
+        var trimmed = symbol.Trim();
+        var dotIndex = trimmed.IndexOf('.');
+        return dotIndex > 0 ? trimmed[..dotIndex] : trimmed;
     }
 
     private static decimal CalculateVolumeAccel(IReadOnlyList<KLineBar> bars)

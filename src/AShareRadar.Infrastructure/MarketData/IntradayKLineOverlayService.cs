@@ -57,7 +57,9 @@ public sealed class IntradayKLineOverlayService : IIntradayKLineOverlayService
             quote.High > 0 ? Math.Max(quote.High, quote.Price) : quote.Price,
             quote.Low > 0 ? Math.Min(quote.Low, quote.Price) : quote.Price,
             quote.Price,
-            quote.Volume);
+            quote.Volume,
+            quote.Amount,
+            quote.TurnoverRate > 0 ? quote.TurnoverRate : null);
 
         return historicalBars
             .Concat([temporaryBar])

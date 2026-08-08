@@ -21,6 +21,9 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
     private const int MinResistanceTouches = 2;
     private const decimal MinClosePositionPercent = 60m;
     private const decimal MaxUpperShadowPercent = 35m;
+    private const decimal MinThirtyMinuteVolumeRatio = 1.5m;
+    private const decimal MinThirtyMinuteClosePositionPercent = 70m;
+    private const decimal MaxThirtyMinuteUpperShadowPercent = 35m;
 
     public string Code => "platform-volume-breakout";
 
@@ -58,22 +61,25 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         StrategyContext context,
         CancellationToken cancellationToken)
     {
+        var isObservationRun = context.RunMode == StrategyRunMode.Observation;
         var signals = context.Snapshot.Quotes
             .Where(item => item.Price > 0
-                && item.ChangePercent >= MinChangePercent
-                && item.ChangePercent <= MaxChangePercent
-                && item.VolumeRatio >= MinVolumeRatio)
-            .Select(item => BuildSignal(item, context))
+                && (isObservationRun
+                    ? item.Amount >= 30_000_000m && item.ChangePercent <= MaxChangePercent
+                    : item.ChangePercent >= MinChangePercent
+                        && item.ChangePercent <= MaxChangePercent
+                        && item.VolumeRatio >= MinVolumeRatio))
+            .Select(item => BuildSignal(item, context, isObservationRun))
             .Where(item => item is not null)
             .Select(item => item!)
             .OrderByDescending(item => item.Score)
-            .Take(5)
+            .Take(isObservationRun ? 12 : 5)
             .ToArray();
 
         return Task.FromResult<IReadOnlyList<StrategySignal>>(signals);
     }
 
-    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context)
+    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context, bool isObservationRun)
     {
         if (context.WeeklyBarsBySymbol is null
             || !TryGetBars(context.WeeklyBarsBySymbol, quote.Symbol, out var weeklyBars)
@@ -115,6 +121,35 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
             item.High >= weeklyPlatformHigh * (1m - ResistanceTouchTolerancePercent / 100m));
         var breakoutPercent = Percent(quote.Price, weeklyPlatformHigh);
 
+        var thirtyMinuteConfirmed = false;
+        var thirtyMinuteVolumeRatio = 0m;
+        var thirtyMinuteClosePosition = 0m;
+        var thirtyMinuteUpperShadow = 0m;
+        if (context.ThirtyMinuteBarsBySymbol is not null
+            && TryGetBars(context.ThirtyMinuteBarsBySymbol, quote.Symbol, out var thirtyBars))
+        {
+            var completedBars = thirtyBars.OrderBy(item => item.TradingTime)
+                .Where(item => item.TradingTime <= DateTime.Now.AddMinutes(-30))
+                .ToArray();
+            if (completedBars.Length >= 6)
+            {
+                var confirmationBar = completedBars[^1];
+                var averageVolume = completedBars[^6..^1].Average(item => item.Volume);
+                thirtyMinuteVolumeRatio = averageVolume > 0 ? confirmationBar.Volume / averageVolume : 0m;
+                thirtyMinuteClosePosition = confirmationBar.High > confirmationBar.Low
+                    ? (confirmationBar.Close - confirmationBar.Low) / (confirmationBar.High - confirmationBar.Low) * 100m : 0m;
+                thirtyMinuteUpperShadow = confirmationBar.High > confirmationBar.Low
+                    ? (confirmationBar.High - Math.Max(confirmationBar.Open, confirmationBar.Close)) / (confirmationBar.High - confirmationBar.Low) * 100m : 100m;
+                thirtyMinuteConfirmed = confirmationBar.Close >= weeklyPlatformHigh * 1.003m
+                    && confirmationBar.Close > confirmationBar.Open
+                    && thirtyMinuteVolumeRatio >= MinThirtyMinuteVolumeRatio
+                    && thirtyMinuteClosePosition >= MinThirtyMinuteClosePositionPercent
+                    && thirtyMinuteUpperShadow <= MaxThirtyMinuteUpperShadowPercent;
+            }
+        }
+        if (!isObservationRun && !thirtyMinuteConfirmed)
+            return null;
+
         KLineBar? currentDailyBar = null;
         IReadOnlyList<KLineBar> dailyBars = [];
         if (context.DailyBarsBySymbol is not null
@@ -137,6 +172,15 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         var closePositionPercent = CalculateClosePositionPercent(currentDailyBar, quote.Price);
         var upperShadowPercent = CalculateUpperShadowPercent(currentDailyBar, quote.Price);
 
+        var structuralFailedConditions = BuildStructuralFailedConditions(
+            weeklyPlatformRangePercent,
+            recentWeeklyRangePercent,
+            resistanceTouchCount);
+        if (structuralFailedConditions.Count > 0)
+        {
+            return null;
+        }
+
         var failedConditions = BuildFailedConditions(
             weeklyPlatformRangePercent,
             recentWeeklyRangePercent,
@@ -147,7 +191,7 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
             closePositionPercent,
             upperShadowPercent,
             quote.ChangePercent);
-        if (failedConditions.Count > 0)
+        if (failedConditions.Count > 0 && !isObservationRun)
         {
             return null;
         }
@@ -155,7 +199,7 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         var compressionScore = Math.Max(12m - weeklyPlatformRangePercent / 4m, 0m);
         var recentCompressionScore = Math.Max(10m - recentWeeklyRangePercent / 3m, 0m);
         var touchScore = Math.Min(resistanceTouchCount, 5) * 1.8m;
-        var breakoutScore = Math.Max(10m - breakoutPercent, 0m);
+        var breakoutScore = breakoutPercent < 0m ? 0m : Math.Max(10m - breakoutPercent, 0m);
         var volumeScore = Math.Min(quote.VolumeRatio * 4m, 12m) + Math.Min(currentVolumeRatioByDaily * 2m, 6m);
         var closePositionScore = Math.Max(closePositionPercent - MinClosePositionPercent, 0m) / 8m;
         var upperShadowPenalty = Math.Max(upperShadowPercent - 20m, 0m) / 2m;
@@ -171,13 +215,17 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
             - upperShadowPenalty
             - chasePenalty,
             2);
-        var confidence = quote.VolumeRatio >= 1.8m
+        var isRealtimeConfirmed = failedConditions.Count == 0;
+        var confidence = !isRealtimeConfirmed
+            ? StrategySignalConfidence.Low
+            : quote.VolumeRatio >= 1.8m
             && currentVolumeRatioByDaily >= 1.2m
             && weeklyPlatformRangePercent <= 28m
             && recentWeeklyRangePercent <= 20m
             && upperShadowPercent <= 20m
             ? StrategySignalConfidence.High
             : StrategySignalConfidence.Medium;
+        var action = isRealtimeConfirmed && thirtyMinuteConfirmed ? StrategySignalAction.Candidate : StrategySignalAction.Watch;
 
         return new StrategySignal(
             quote.Symbol,
@@ -185,11 +233,11 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
             Code,
             Name,
             Type,
-            Score: Math.Min(score, 100m),
+            Score: Math.Min(isObservationRun && !thirtyMinuteConfirmed ? score : score, isObservationRun && !thirtyMinuteConfirmed ? 75m : 100m),
             Price: quote.Price,
             Reason: $"突破近 {WeeklyPlatformLookback} 周平台上沿 {weeklyPlatformHigh:F2}，周线平台振幅 {weeklyPlatformRangePercent:F1}%，近 {WeeklyRecentCompressionLookback} 周振幅 {recentWeeklyRangePercent:F1}%，压力位触碰 {resistanceTouchCount} 次，突破距离 {breakoutPercent:F1}%，量比 {quote.VolumeRatio:F2}。",
             Risk: BuildRisk(quote.ChangePercent, breakoutPercent, weeklyPlatformRangePercent, recentWeeklyRangePercent, upperShadowPercent),
-            Action: StrategySignalAction.Candidate,
+            Action: action,
             Confidence: confidence,
             Stage: StrategyStage.TriggerConfirmation,
             Metrics: new Dictionary<string, decimal>
@@ -206,6 +254,10 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
                 ["close_position_percent"] = closePositionPercent,
                 ["upper_shadow_percent"] = upperShadowPercent,
                 ["average_daily_volume_20"] = averageDailyVolume
+                , ["thirty_minute_confirmed"] = thirtyMinuteConfirmed ? 1m : 0m
+                , ["thirty_minute_volume_ratio"] = thirtyMinuteVolumeRatio
+                , ["thirty_minute_close_position_percent"] = thirtyMinuteClosePosition
+                , ["thirty_minute_upper_shadow_percent"] = thirtyMinuteUpperShadow
             },
             Tags: ["放量", "周线平台突破", "结构验证", confidence == StrategySignalConfidence.High ? "高质量突破" : "候选突破"],
             PassedConditions:
@@ -218,7 +270,7 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
                 $"收盘/当前价位置 {closePositionPercent:F0}% >= {MinClosePositionPercent:F0}%",
                 $"上影线 {upperShadowPercent:F0}% <= {MaxUpperShadowPercent:F0}%"
             ],
-            FailedConditions: [],
+            FailedConditions: isRealtimeConfirmed ? [] : failedConditions,
             StopLossPrice: Math.Round(Math.Max(weeklyPlatformHigh * 0.97m, weeklyPlatformLow), 2),
             TakeProfitPrice: Math.Round(quote.Price * 1.08m, 2));
     }
@@ -234,6 +286,30 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         }
 
         return barsBySymbol.TryGetValue(StockSymbolNormalizer.NormalizeCode(symbol), out bars!);
+    }
+
+    private static List<string> BuildStructuralFailedConditions(
+        decimal weeklyPlatformRangePercent,
+        decimal recentWeeklyRangePercent,
+        int resistanceTouchCount)
+    {
+        var failed = new List<string>();
+        if (weeklyPlatformRangePercent > MaxWeeklyPlatformRangePercent)
+        {
+            failed.Add($"周线平台振幅 {weeklyPlatformRangePercent:F1}% > {MaxWeeklyPlatformRangePercent:F0}%");
+        }
+
+        if (recentWeeklyRangePercent > MaxWeeklyRecentRangePercent)
+        {
+            failed.Add($"近 {WeeklyRecentCompressionLookback} 周振幅 {recentWeeklyRangePercent:F1}% > {MaxWeeklyRecentRangePercent:F0}%");
+        }
+
+        if (resistanceTouchCount < MinResistanceTouches)
+        {
+            failed.Add($"压力位触碰 {resistanceTouchCount} 次 < {MinResistanceTouches} 次");
+        }
+
+        return failed;
     }
 
     private static List<string> BuildFailedConditions(

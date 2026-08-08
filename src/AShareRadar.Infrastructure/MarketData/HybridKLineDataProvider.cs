@@ -7,6 +7,7 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
     private const int IntradayCacheConcurrency = 8;
 
     private readonly DuckDbMinuteKLineCacheProvider _minuteCacheProvider;
+    private readonly DuckDbIntradayKLineCacheProvider _intradayCacheProvider;
     private readonly EastMoneyQuantDotNetKLineDataProvider _eastMoneyDotNetProvider;
     private readonly EastMoneyQuantKLineDataProvider _eastMoneyIntradayProvider;
     private readonly TencentKLineDataProvider _intradayProvider;
@@ -14,12 +15,14 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
 
     public HybridKLineDataProvider(
         DuckDbMinuteKLineCacheProvider minuteCacheProvider,
+        DuckDbIntradayKLineCacheProvider intradayCacheProvider,
         EastMoneyQuantDotNetKLineDataProvider eastMoneyDotNetProvider,
         EastMoneyQuantKLineDataProvider eastMoneyIntradayProvider,
         TencentKLineDataProvider intradayProvider,
         DuckDbKLineDataProvider dailyProvider)
     {
         _minuteCacheProvider = minuteCacheProvider;
+        _intradayCacheProvider = intradayCacheProvider;
         _eastMoneyDotNetProvider = eastMoneyDotNetProvider;
         _eastMoneyIntradayProvider = eastMoneyIntradayProvider;
         _intradayProvider = intradayProvider;
@@ -37,7 +40,7 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
         var normalizedPeriod = SimulatedKLineDataProvider.NormalizePeriod(period);
         if (IsIntradayPeriod(normalizedPeriod))
         {
-            var cachedBars = await _minuteCacheProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
+            var cachedBars = await LoadCachedIntradayKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
             if (cachedBars.Count > 0)
             {
                 return cachedBars;
@@ -52,7 +55,7 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
             return eastMoneyDailyBars;
         }
 
-        return await _dailyProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
+        return [];
     }
 
     public async Task<IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>> LoadKLinesAsync(
@@ -64,11 +67,31 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
         var normalizedPeriod = SimulatedKLineDataProvider.NormalizePeriod(period);
         if (!IsIntradayPeriod(normalizedPeriod))
         {
-            return await _dailyProvider.LoadKLinesAsync(symbols, normalizedPeriod, count, cancellationToken);
+            var dailyResults = new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase);
+            using var dailyThrottler = new SemaphoreSlim(IntradayCacheConcurrency);
+            var dailyTasks = symbols.Select(async symbol =>
+            {
+                await dailyThrottler.WaitAsync(cancellationToken);
+                try
+                {
+                    var bars = await _eastMoneyDotNetProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
+                    if (bars.Count > 0)
+                    {
+                        lock (dailyResults)
+                            dailyResults[StockSymbolNormalizer.NormalizeCode(symbol)] = bars;
+                    }
+                }
+                finally
+                {
+                    dailyThrottler.Release();
+                }
+            });
+            await Task.WhenAll(dailyTasks);
+            return dailyResults;
         }
 
         var results = new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase);
-        var cachedResults = await _minuteCacheProvider.LoadKLinesAsync(symbols, normalizedPeriod, count, cancellationToken);
+        var cachedResults = await LoadCachedIntradayKLinesAsync(symbols, normalizedPeriod, count, cancellationToken);
         foreach (var item in cachedResults)
         {
             results[item.Key] = item.Value;
@@ -117,28 +140,50 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
         var eastMoneyDotNetBars = await _eastMoneyDotNetProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
         if (eastMoneyDotNetBars.Count > 0)
         {
-            await SaveMinuteBarsIfNeededAsync(symbol, normalizedPeriod, eastMoneyDotNetBars, cancellationToken);
+            await SaveIntradayBarsIfNeededAsync(symbol, normalizedPeriod, eastMoneyDotNetBars, cancellationToken);
             return eastMoneyDotNetBars;
         }
 
         var eastMoneyBars = await _eastMoneyIntradayProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
         if (eastMoneyBars.Count > 0)
         {
-            await SaveMinuteBarsIfNeededAsync(symbol, normalizedPeriod, eastMoneyBars, cancellationToken);
+            await SaveIntradayBarsIfNeededAsync(symbol, normalizedPeriod, eastMoneyBars, cancellationToken);
             return eastMoneyBars;
         }
 
         var intradayBars = await _intradayProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
         if (intradayBars.Count > 0)
         {
-            await SaveMinuteBarsIfNeededAsync(symbol, normalizedPeriod, intradayBars, cancellationToken);
+            await SaveIntradayBarsIfNeededAsync(symbol, normalizedPeriod, intradayBars, cancellationToken);
             return intradayBars;
         }
 
         return [];
     }
 
-    private async Task SaveMinuteBarsIfNeededAsync(
+    private async Task<IReadOnlyList<KLineBar>> LoadCachedIntradayKLineAsync(
+        string symbol,
+        string normalizedPeriod,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        return normalizedPeriod is "minute" or "m1"
+            ? await _minuteCacheProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken)
+            : await _intradayCacheProvider.LoadKLineAsync(symbol, normalizedPeriod, count, cancellationToken);
+    }
+
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<KLineBar>>> LoadCachedIntradayKLinesAsync(
+        IReadOnlyList<string> symbols,
+        string normalizedPeriod,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        return normalizedPeriod is "minute" or "m1"
+            ? await _minuteCacheProvider.LoadKLinesAsync(symbols, normalizedPeriod, count, cancellationToken)
+            : await _intradayCacheProvider.LoadKLinesAsync(symbols, normalizedPeriod, count, cancellationToken);
+    }
+
+    private async Task SaveIntradayBarsIfNeededAsync(
         string symbol,
         string normalizedPeriod,
         IReadOnlyList<KLineBar> bars,
@@ -147,6 +192,10 @@ public sealed class HybridKLineDataProvider : IBatchKLineDataProvider
         if (normalizedPeriod is "minute" or "m1")
         {
             await _minuteCacheProvider.SaveAsync(symbol, bars, cancellationToken);
+        }
+        else if (normalizedPeriod is "m30")
+        {
+            await _intradayCacheProvider.SaveAsync(symbol, normalizedPeriod, bars, cancellationToken);
         }
     }
 

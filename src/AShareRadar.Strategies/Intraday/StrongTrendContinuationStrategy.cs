@@ -52,22 +52,25 @@ public sealed class StrongTrendContinuationStrategy : ISignalStrategy
         StrategyContext context,
         CancellationToken cancellationToken)
     {
+        var isObservationRun = context.RunMode == StrategyRunMode.Observation;
         var signals = context.Snapshot.Quotes
             .Where(item => item.Price > 0
-                && item.ChangePercent >= MinChangePercent
-                && item.ChangePercent <= MaxChangePercent
-                && item.VolumeRatio >= MinVolumeRatio)
-            .Select(item => BuildSignal(item, context))
+                && (isObservationRun
+                    ? item.Amount >= 50_000_000m && item.ChangePercent <= MaxChangePercent
+                    : item.ChangePercent >= MinChangePercent
+                        && item.ChangePercent <= MaxChangePercent
+                        && item.VolumeRatio >= MinVolumeRatio))
+            .Select(item => BuildSignal(item, context, isObservationRun))
             .Where(item => item is not null)
             .Select(item => item!)
             .OrderByDescending(item => item.Score)
-            .Take(5)
+            .Take(isObservationRun ? 12 : 5)
             .ToArray();
 
         return Task.FromResult<IReadOnlyList<StrategySignal>>(signals);
     }
 
-    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context)
+    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context, bool isObservationRun)
     {
         if (context.DailyBarsBySymbol is null
             || !context.DailyBarsBySymbol.TryGetValue(quote.Symbol, out var bars)
@@ -108,6 +111,20 @@ public sealed class StrongTrendContinuationStrategy : ISignalStrategy
         var latestClose = historyBars[^1].Close;
         var aboveLatestClosePercent = latestClose > 0 ? (quote.Price - latestClose) / latestClose * 100m : 0m;
 
+        var structuralFailedConditions = BuildStructuralFailedConditions(
+            ma5,
+            ma10,
+            ma20,
+            ma60,
+            trendStrengthPercent,
+            ma20SlopePercent,
+            priceAboveMa20Percent,
+            recentFiveDayChangePercent);
+        if (structuralFailedConditions.Count > 0)
+        {
+            return null;
+        }
+
         var failedConditions = BuildFailedConditions(
             ma5,
             ma10,
@@ -122,12 +139,15 @@ public sealed class StrongTrendContinuationStrategy : ISignalStrategy
             upperShadowPercent,
             quote.Price,
             latestClose);
-        if (failedConditions.Count > 0)
+        if (failedConditions.Count > 0 && !isObservationRun)
         {
             return null;
         }
 
-        var confidence = trendStrengthPercent >= 8m
+        var isRealtimeConfirmed = failedConditions.Count == 0;
+        var confidence = !isRealtimeConfirmed
+            ? StrategySignalConfidence.Low
+            : trendStrengthPercent >= 8m
             && ma20SlopePercent > 0m
             && priceAboveMa20Percent <= 5m
             && quote.VolumeRatio >= 1.5m
@@ -152,7 +172,7 @@ public sealed class StrongTrendContinuationStrategy : ISignalStrategy
             Price: quote.Price,
             Reason: $"MA5 {ma5:F2}、MA10 {ma10:F2}、MA20 {ma20:F2}、MA60 {ma60:F2} 多头排列，MA20 高于 MA60 {trendStrengthPercent:F1}%，距离 MA20 {priceAboveMa20Percent:F1}%，量比 {quote.VolumeRatio:F2}。",
             Risk: BuildRisk(priceAboveMa20Percent, recentFiveDayChangePercent, upperShadowPercent, quote.ChangePercent),
-            Action: StrategySignalAction.Candidate,
+            Action: isRealtimeConfirmed ? StrategySignalAction.Candidate : StrategySignalAction.Watch,
             Confidence: confidence,
             Stage: StrategyStage.PatternValidation,
             Metrics: new Dictionary<string, decimal>
@@ -183,9 +203,43 @@ public sealed class StrongTrendContinuationStrategy : ISignalStrategy
                 $"量比 {quote.VolumeRatio:F2} >= {MinVolumeRatio:F1}",
                 $"收盘/当前价位置 {closePositionPercent:F0}% >= {MinClosePositionPercent:F0}%"
             ],
-            FailedConditions: [],
+            FailedConditions: isRealtimeConfirmed ? [] : failedConditions,
             StopLossPrice: Math.Round(ma20 * 0.97m, 2),
             TakeProfitPrice: Math.Round(quote.Price * 1.06m, 2));
+    }
+
+    private static List<string> BuildStructuralFailedConditions(
+        decimal ma5,
+        decimal ma10,
+        decimal ma20,
+        decimal ma60,
+        decimal trendStrengthPercent,
+        decimal ma20SlopePercent,
+        decimal priceAboveMa20Percent,
+        decimal recentFiveDayChangePercent)
+    {
+        var failed = new List<string>();
+        if (!(ma5 > ma10 && ma10 > ma20 && ma20 > ma60))
+        {
+            failed.Add("均线未形成 MA5 > MA10 > MA20 > MA60 多头排列");
+        }
+
+        if (trendStrengthPercent < MinTrendStrengthPercent || ma20SlopePercent <= 0m)
+        {
+            failed.Add($"趋势强度不足，MA20 高于 MA60 {trendStrengthPercent:F1}%，斜率 {ma20SlopePercent:F2}%");
+        }
+
+        if (priceAboveMa20Percent < 0m || priceAboveMa20Percent > MaxDistanceFromMa20Percent)
+        {
+            failed.Add($"距离 MA20 {priceAboveMa20Percent:F1}% 不在合理区间");
+        }
+
+        if (recentFiveDayChangePercent > MaxRecentFiveDayChangePercent)
+        {
+            failed.Add($"近 {RecentLookback} 日涨幅 {recentFiveDayChangePercent:F1}% 过热");
+        }
+
+        return failed;
     }
 
     private static List<string> BuildFailedConditions(

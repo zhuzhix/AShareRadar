@@ -411,11 +411,14 @@ def main() -> None:
 
     write_progress(progress_path, status="running", step="build_dataset", experiment_id=experiment_id)
     _init_qlib(cfg)
+    from qlib.workflow import R
+
     dataset = _build_dataset(cfg)
     model = _build_model(cfg)
 
     write_progress(progress_path, status="running", step="fit", experiment_id=experiment_id)
     evals_result: dict[str, Any] = {}
+    R.log_metrics = lambda *_, **__: None
     model.fit(dataset, evals_result=evals_result)
 
     write_progress(progress_path, status="running", step="predict", experiment_id=experiment_id)

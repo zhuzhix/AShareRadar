@@ -2,8 +2,8 @@ using AShareRadar.Application.MarketData;
 using AShareRadar.Application.Monitoring;
 using AShareRadar.Application.Opportunities;
 using AShareRadar.Application.Realtime;
+using AShareRadar.Application.Review;
 using AShareRadar.Application.Strategies;
-using AShareRadar.Application.StrategyTraining;
 using AShareRadar.Domain.MarketData;
 
 namespace AShareRadar.ServiceHost.Workers;
@@ -18,7 +18,7 @@ public sealed class HistoricalStrategyScanService
     private readonly MonitorRuntimeState _runtimeState;
     private readonly IRealtimeEventPublisher _realtimeEventPublisher;
     private readonly ILogger<HistoricalStrategyScanService> _logger;
-    private readonly StrategyParameterProfileService _strategyParameterProfileService;
+    private readonly LongTermTrackingService _longTermTrackingService;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public HistoricalStrategyScanService(
@@ -30,7 +30,7 @@ public sealed class HistoricalStrategyScanService
         MonitorRuntimeState runtimeState,
         IRealtimeEventPublisher realtimeEventPublisher,
         ILogger<HistoricalStrategyScanService> logger,
-        StrategyParameterProfileService strategyParameterProfileService)
+        LongTermTrackingService longTermTrackingService)
     {
         _options = options;
         _symbolProvider = symbolProvider;
@@ -40,7 +40,7 @@ public sealed class HistoricalStrategyScanService
         _runtimeState = runtimeState;
         _realtimeEventPublisher = realtimeEventPublisher;
         _logger = logger;
-        _strategyParameterProfileService = strategyParameterProfileService;
+        _longTermTrackingService = longTermTrackingService;
     }
 
     public async Task<bool> TryRunScheduledAsync(CancellationToken cancellationToken)
@@ -116,7 +116,7 @@ public sealed class HistoricalStrategyScanService
 
             var strategyTasks = strategies.Select(strategy =>
                 strategy.EvaluateAsync(
-                    context with { Parameters = _strategyParameterProfileService.GetActiveParameters(strategy.Code) },
+                    context,
                     cancellationToken));
             var signalGroups = await Task.WhenAll(strategyTasks);
             var signals = signalGroups.SelectMany(item => item).ToArray();
@@ -125,6 +125,7 @@ public sealed class HistoricalStrategyScanService
                 context.TradingDate,
                 startedAt,
                 signals);
+            _longTermTrackingService.TrackSignalEvents(signalEvents);
 
             foreach (var signalEvent in signalEvents)
             {

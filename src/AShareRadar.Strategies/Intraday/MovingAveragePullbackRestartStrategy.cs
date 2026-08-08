@@ -51,21 +51,23 @@ public sealed class MovingAveragePullbackRestartStrategy : ISignalStrategy
         StrategyContext context,
         CancellationToken cancellationToken)
     {
+        var isObservationRun = context.RunMode == StrategyRunMode.Observation;
         var signals = context.Snapshot.Quotes
             .Where(item => item.Price > 0
-                && item.ChangePercent >= 0.3m
-                && item.VolumeRatio >= 0.9m)
-            .Select(item => BuildSignal(item, context))
+                && (isObservationRun
+                    ? item.Amount >= 30_000_000m && item.ChangePercent <= 5.5m
+                    : item.ChangePercent >= 0.3m && item.VolumeRatio >= 0.9m))
+            .Select(item => BuildSignal(item, context, isObservationRun))
             .Where(item => item is not null)
             .Select(item => item!)
             .OrderByDescending(item => item.Score)
-            .Take(5)
+            .Take(isObservationRun ? 12 : 5)
             .ToArray();
 
         return Task.FromResult<IReadOnlyList<StrategySignal>>(signals);
     }
 
-    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context)
+    private StrategySignal? BuildSignal(StockQuote quote, StrategyContext context, bool isObservationRun)
     {
         if (context.DailyBarsBySymbol is null
             || !context.DailyBarsBySymbol.TryGetValue(quote.Symbol, out var bars)
@@ -112,6 +114,20 @@ public sealed class MovingAveragePullbackRestartStrategy : ISignalStrategy
         var closePositionPercent = CalculateClosePositionPercent(currentBar, quote.Price);
         var upperShadowPercent = CalculateUpperShadowPercent(currentBar, quote.Price);
 
+        var structuralFailedConditions = BuildStructuralFailedConditions(
+            ma20,
+            ma30,
+            ma60,
+            trendStrengthPercent,
+            pullbackDistancePercent,
+            closeBreakdownPercent,
+            pullbackVolumeRatio,
+            recentFiveDayChangePercent);
+        if (structuralFailedConditions.Count > 0)
+        {
+            return null;
+        }
+
         var failedConditions = BuildFailedConditions(
             ma20,
             ma30,
@@ -127,15 +143,20 @@ public sealed class MovingAveragePullbackRestartStrategy : ISignalStrategy
             recentFiveDayChangePercent,
             closePositionPercent,
             upperShadowPercent);
-        if (failedConditions.Count > 0)
+        if (failedConditions.Count > 0 && !isObservationRun)
         {
             return null;
         }
 
-        var action = priceAboveSupportPercent <= 3m
+        var isRealtimeConfirmed = failedConditions.Count == 0;
+        var action = !isRealtimeConfirmed
+            ? StrategySignalAction.Watch
+            : priceAboveSupportPercent <= 3m
             ? StrategySignalAction.PullbackWait
             : StrategySignalAction.Candidate;
-        var confidence = trendStrengthPercent >= 4m
+        var confidence = !isRealtimeConfirmed
+            ? StrategySignalConfidence.Low
+            : trendStrengthPercent >= 4m
             && quote.VolumeRatio >= 1.2m
             && pullbackVolumeRatio <= 1.05m
             && upperShadowPercent <= 25m
@@ -199,6 +220,45 @@ public sealed class MovingAveragePullbackRestartStrategy : ISignalStrategy
                 : [],
             StopLossPrice: Math.Round(supportLine * 0.97m, 2),
             TakeProfitPrice: Math.Round(quote.Price * 1.06m, 2));
+    }
+
+    private static List<string> BuildStructuralFailedConditions(
+        decimal ma20,
+        decimal ma30,
+        decimal ma60,
+        decimal trendStrengthPercent,
+        decimal pullbackDistancePercent,
+        decimal closeBreakdownPercent,
+        decimal pullbackVolumeRatio,
+        decimal recentFiveDayChangePercent)
+    {
+        var failed = new List<string>();
+        if (ma20 <= ma60 || ma30 <= ma60 || trendStrengthPercent < 1m)
+        {
+            failed.Add($"中期趋势不足，MA20/MA30 未有效强于 MA60，趋势强度 {trendStrengthPercent:F1}%");
+        }
+
+        if (pullbackDistancePercent > PullbackToleranceUpperPercent || pullbackDistancePercent < -MaxBreakdownPercent)
+        {
+            failed.Add($"回踩距离 {pullbackDistancePercent:F1}% 不在支撑附近");
+        }
+
+        if (closeBreakdownPercent < -MaxBreakdownPercent)
+        {
+            failed.Add($"最低收盘跌破支撑 {Math.Abs(closeBreakdownPercent):F1}%");
+        }
+
+        if (pullbackVolumeRatio > 1.25m)
+        {
+            failed.Add($"回踩阶段放量偏大，量能比 {pullbackVolumeRatio:F2}");
+        }
+
+        if (recentFiveDayChangePercent > MaxRecentFiveDayChangePercent)
+        {
+            failed.Add($"近 5 日涨幅 {recentFiveDayChangePercent:F1}% 过热");
+        }
+
+        return failed;
     }
 
     private static List<string> BuildFailedConditions(

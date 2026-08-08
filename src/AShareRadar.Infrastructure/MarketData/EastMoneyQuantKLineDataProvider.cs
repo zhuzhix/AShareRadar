@@ -185,7 +185,8 @@ public sealed class EastMoneyQuantKLineDataProvider : IKLineDataProvider
             payload.High,
             payload.Low,
             payload.Close,
-            payload.Volume);
+            payload.Volume,
+            payload.Amount);
     }
 
     private static bool IsIntradayPeriod(string period)

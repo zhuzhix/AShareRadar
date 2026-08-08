@@ -2,7 +2,6 @@ using System.Diagnostics;
 using AShareRadar.Application.MarketData;
 using AShareRadar.Application.Monitoring;
 using AShareRadar.Application.Strategies;
-using AShareRadar.Application.StrategyTraining;
 using AShareRadar.Domain.MarketData;
 using AShareRadar.Domain.Strategies;
 
@@ -21,7 +20,6 @@ public sealed class BacktestReplayService
     private readonly IMarketSentimentStore _marketSentimentStore;
     private readonly ISectorHeatService _sectorHeatService;
     private readonly MarketSentimentStrategyOptions _marketSentimentStrategyOptions;
-    private readonly StrategyParameterProfileService _strategyParameterProfileService;
 
     public BacktestReplayService(
         IKLineDataProvider kLineDataProvider,
@@ -29,8 +27,7 @@ public sealed class BacktestReplayService
         IStrategyRegistry strategyRegistry,
         IMarketSentimentStore marketSentimentStore,
         ISectorHeatService sectorHeatService,
-        MarketSentimentStrategyOptions marketSentimentStrategyOptions,
-        StrategyParameterProfileService strategyParameterProfileService)
+        MarketSentimentStrategyOptions marketSentimentStrategyOptions)
     {
         _kLineDataProvider = kLineDataProvider;
         _kLineDataProviderDiagnostics = kLineDataProvider as IKLineDataProviderDiagnostics;
@@ -39,7 +36,6 @@ public sealed class BacktestReplayService
         _marketSentimentStore = marketSentimentStore;
         _sectorHeatService = sectorHeatService;
         _marketSentimentStrategyOptions = marketSentimentStrategyOptions;
-        _strategyParameterProfileService = strategyParameterProfileService;
     }
 
     public async Task<BacktestReplayResult> ReplayAsync(
@@ -118,7 +114,7 @@ public sealed class BacktestReplayService
             foreach (var strategy in strategies)
             {
                 var strategySignals = await strategy.EvaluateAsync(
-                    context with { Parameters = _strategyParameterProfileService.GetActiveParameters(strategy.Code) },
+                    context,
                     cancellationToken);
                 var adjustedSignals = MarketSentimentSignalAdjuster.Apply(
                     strategySignals,
