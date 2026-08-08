@@ -156,6 +156,52 @@
             </Setter>
         </Style>
 
+        <Style x:Key="DailyHitKLineButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="#EEF5FF" />
+            <Setter Property="Foreground" Value="#2B6CB0" />
+            <Setter Property="BorderBrush" Value="#D8E7FF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="ToolTip" Value="打开K线" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="11"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform ScaleX="1" ScaleY="1" />
+                            </Border.RenderTransform>
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#DDEBFF" />
+                                <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.94" ScaleY="0.94" />
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
 
         <Style x:Key="PageTabButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Height" Value="36" />
@@ -1738,64 +1784,92 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
                                     </Grid.RowDefinitions>
-                                    <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E3EAF1" BorderThickness="1" CornerRadius="5" Padding="12" HorizontalAlignment="Stretch">
-                                            <StackPanel>
-                                                <TextBlock Text="每日命中复盘" FontSize="18" FontWeight="SemiBold" />
-                                                <TextBlock x:Name="StockPoolSummaryText" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" Text="按日期查看系统命中，观察策略、强度和人工处理状态。" TextWrapping="Wrap" />
+                                    <Border Grid.Row="0" Background="#F0F6FF" BorderBrush="#DDEBFF" BorderThickness="1" CornerRadius="12" Padding="16,12" HorizontalAlignment="Stretch">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="📋" FontSize="13" VerticalAlignment="Center" />
+                                                <TextBlock Margin="8,0,0,0" Text="信号与复盘 · 历史统计 · 次日预测 · 长期跟踪 · 策略中心" FontWeight="SemiBold" />
+                                                <TextBlock Margin="14,0,0,0" Text="已集中到研究页。" Foreground="{StaticResource MutedTextBrush}" FontWeight="SemiBold" />
                                             </StackPanel>
-                                        </Border>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <Border Padding="13,4" Background="#FFFFFF" BorderBrush="#D3E4FA" BorderThickness="1" CornerRadius="12">
+                                                    <TextBlock Text="每日命中" Foreground="#37628E" FontWeight="SemiBold" />
+                                                </Border>
+                                                <Border Margin="10,0,0,0" Padding="13,4" Background="#FFFFFF" BorderBrush="#D3E4FA" BorderThickness="1" CornerRadius="12">
+                                                    <TextBlock Text="每日命中复盘" Foreground="#37628E" FontWeight="SemiBold" />
+                                                </Border>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
 
-                                    <TextBlock Grid.Row="1" Margin="0,14,0,0" Text="每日命中" FontWeight="SemiBold" />
-                                    <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E3EAF1" BorderThickness="1" CornerRadius="5" Padding="10" Margin="0,8,0,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                    <Border Grid.Row="1" Margin="0,16,0,0" Background="#FFFFFF" BorderBrush="#E5EDF7" BorderThickness="1" CornerRadius="12" Padding="14,10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="220" />
+                                                <ColumnDefinition Width="170" />
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="每日命中" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                            <hc:DatePicker x:Name="StockPoolHitDatePicker" Grid.Column="1" Width="138" Height="30" Margin="22,0,0,0" />
+                                            <TextBox x:Name="DailyHitSearchBox"
+                                                     Grid.Column="2"
+                                                     Height="30"
+                                                     Margin="14,0,0,0"
+                                                     Padding="10,4"
+                                                     Background="#F8FBFF"
+                                                     BorderBrush="#DDE8F5"
+                                                     Foreground="{StaticResource TextBrush}"
+                                                     hc:InfoElement.Placeholder="股票代码 / 名称"
+                                                     ToolTip="搜索股票代码或名称"
+                                                     TextChanged="DailyHitFilterTextChanged" />
+                                            <ComboBox x:Name="DailyHitStrategyFilterComboBox"
+                                                      Grid.Column="3"
+                                                      Height="30"
+                                                      Margin="14,0,0,0"
+                                                      Background="#F8FBFF"
+                                                      BorderBrush="#DDE8F5"
+                                                      Foreground="{StaticResource TextBrush}"
+                                                      SelectionChanged="DailyHitFilterSelectionChanged" />
+                                            <ComboBox x:Name="DailyHitStatusFilterComboBox"
+                                                      Grid.Column="4"
+                                                      Height="30"
+                                                      Margin="14,0,0,0"
+                                                      Background="#F8FBFF"
+                                                      BorderBrush="#DDE8F5"
+                                                      Foreground="{StaticResource TextBrush}"
+                                                      SelectionChanged="DailyHitFilterSelectionChanged" />
+                                            <Border Grid.Column="5" Margin="16,0,12,0" Padding="14,5" Background="#F2F7FF" BorderBrush="#DCEAFF" BorderThickness="1" CornerRadius="15" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <TextBlock x:Name="DailyHitSummaryText" Foreground="#5B789B" FontSize="12" FontWeight="SemiBold" Text="选择日期后显示当天命中的股票。" TextWrapping="NoWrap" />
+                                            </Border>
+                                            <Button x:Name="RefreshDailyHitsButton"
+                                                    Grid.Column="6"
+                                                    Width="76"
+                                                    Height="30"
+                                                    Margin="0"
+                                                    Padding="8,0"
+                                                    Content="刷新"
+                                                    Style="{StaticResource PrimaryButtonStyle}"
+                                                    Click="RefreshDailyHitsButton_Click" />
+                                        </Grid>
+                                    </Border>
+
+                                    <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E5EDF7" BorderThickness="1" CornerRadius="12" Padding="0" Margin="0,16,0,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                                         <Grid>
                                             <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="*" />
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
-                                            <Grid Grid.Row="0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="220" />
-                                                    <ColumnDefinition Width="170" />
-                                                    <ColumnDefinition Width="150" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
-                                                <hc:DatePicker x:Name="StockPoolHitDatePicker" Width="138" Height="30" />
-                                                <TextBox x:Name="DailyHitSearchBox"
-                                                         Grid.Column="1"
-                                                         Height="30"
-                                                         Margin="10,0,0,0"
-                                                         Padding="9,4"
-                                                         hc:InfoElement.Placeholder="股票代码 / 名称"
-                                                         ToolTip="搜索股票代码或名称"
-                                                         TextChanged="DailyHitFilterTextChanged" />
-                                                <ComboBox x:Name="DailyHitStrategyFilterComboBox"
-                                                          Grid.Column="2"
-                                                          Height="30"
-                                                          Margin="10,0,0,0"
-                                                          SelectionChanged="DailyHitFilterSelectionChanged" />
-                                                <ComboBox x:Name="DailyHitStatusFilterComboBox"
-                                                          Grid.Column="3"
-                                                          Height="30"
-                                                          Margin="10,0,0,0"
-                                                          SelectionChanged="DailyHitFilterSelectionChanged" />
-                                                <Button x:Name="RefreshDailyHitsButton"
-                                                        Grid.Column="4"
-                                                        Width="76"
-                                                        Height="30"
-                                                        Margin="10,0,0,0"
-                                                        Padding="8,0"
-                                                        Content="刷新"
-                                                        Style="{StaticResource PrimaryButtonStyle}"
-                                                        Click="RefreshDailyHitsButton_Click" />
-                                            </Grid>
-                                            <TextBlock x:Name="DailyHitSummaryText" Grid.Row="1" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" FontSize="12" Text="选择日期后显示当天命中的股票。" TextWrapping="Wrap" />
                                             <DataGrid x:Name="DailyHitDataGrid"
-                                                      Grid.Row="2"
-                                                      Margin="0,8,0,0"
+                                                      Grid.Row="0"
+                                                      Margin="0"
                                                       AutoGenerateColumns="False"
                                                       IsReadOnly="True"
                                                       CanUserAddRows="False"
@@ -1805,15 +1879,14 @@
                                                       CanUserSortColumns="True"
                                                       HeadersVisibility="Column"
                                                       GridLinesVisibility="Horizontal"
-                                                      HorizontalGridLinesBrush="#E9EEF4"
-                                                      BorderBrush="#DCE4ED"
-                                                      BorderThickness="1"
+                                                      HorizontalGridLinesBrush="#EDF2F8"
+                                                      BorderThickness="0"
                                                       Background="#FFFFFF"
                                                       RowBackground="#FFFFFF"
-                                                      AlternatingRowBackground="#F8FAFD"
+                                                      AlternatingRowBackground="#F6FAFF"
                                                       AlternationCount="2"
-                                                      RowHeight="46"
-                                                      ColumnHeaderHeight="38"
+                                                      RowHeight="52"
+                                                      ColumnHeaderHeight="42"
                                                       SelectionMode="Single"
                                                       SelectionUnit="FullRow"
                                                       EnableRowVirtualization="True"
@@ -1826,36 +1899,37 @@
                                                       SelectionChanged="DailyHitDataGrid_SelectionChanged">
                                                 <DataGrid.Resources>
                                                     <Style TargetType="DataGridColumnHeader">
-                                                        <Setter Property="Background" Value="#F3F6FA" />
-                                                        <Setter Property="Foreground" Value="#5E6D82" />
+                                                        <Setter Property="Background" Value="#F6FAFF" />
+                                                        <Setter Property="Foreground" Value="#607794" />
                                                         <Setter Property="FontWeight" Value="SemiBold" />
-                                                        <Setter Property="BorderBrush" Value="#DCE4ED" />
-                                                        <Setter Property="BorderThickness" Value="0,0,1,1" />
-                                                        <Setter Property="Padding" Value="10,0" />
+                                                        <Setter Property="BorderBrush" Value="#E3ECF7" />
+                                                        <Setter Property="BorderThickness" Value="0,0,0,1" />
+                                                        <Setter Property="Padding" Value="12,0" />
                                                         <Setter Property="HorizontalContentAlignment" Value="Left" />
                                                     </Style>
                                                     <Style TargetType="DataGridCell">
                                                         <Setter Property="BorderThickness" Value="0" />
-                                                        <Setter Property="Padding" Value="10,0" />
+                                                        <Setter Property="Padding" Value="12,0" />
                                                         <Setter Property="VerticalContentAlignment" Value="Center" />
                                                         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
                                                     </Style>
                                                     <Style TargetType="DataGridRow">
                                                         <Setter Property="BorderThickness" Value="0" />
                                                         <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                                        <Setter Property="Cursor" Value="Hand" />
                                                         <Style.Triggers>
                                                             <Trigger Property="IsSelected" Value="True">
-                                                                <Setter Property="Background" Value="{StaticResource PrimarySoftBrush}" />
+                                                                <Setter Property="Background" Value="#F1F7FF" />
                                                                 <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
                                                             </Trigger>
                                                             <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter Property="Background" Value="#F0F5FC" />
+                                                                <Setter Property="Background" Value="#F4F9FF" />
                                                             </Trigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </DataGrid.Resources>
                                                 <DataGrid.Columns>
-                                                    <DataGridTemplateColumn Header="股票" Width="190" SortMemberPath="Symbol">
+                                                    <DataGridTemplateColumn Header="股票" Width="210" SortMemberPath="Symbol">
                                                         <DataGridTemplateColumn.CellTemplate>
                                                             <DataTemplate>
                                                                 <Grid>
@@ -1864,8 +1938,8 @@
                                                                         <ColumnDefinition Width="Auto" />
                                                                     </Grid.ColumnDefinitions>
                                                                     <StackPanel VerticalAlignment="Center">
-                                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Margin="0,2,0,0" Text="{Binding Symbol}" Foreground="{StaticResource SubtleTextBrush}" FontSize="11" />
+                                                                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                        <TextBlock Margin="0,2,0,0" Text="{Binding Symbol}" Foreground="#7F97B5" FontSize="12" FontWeight="SemiBold" />
                                                                     </StackPanel>
                                                                     <Button Grid.Column="1"
                                                                             Style="{StaticResource CopySymbolButtonStyle}"
@@ -1880,32 +1954,76 @@
                                                             </DataTemplate>
                                                         </DataGridTemplateColumn.CellTemplate>
                                                     </DataGridTemplateColumn>
-                                                    <DataGridTextColumn Header="最新命中" Binding="{Binding LatestHitTimeText}" SortMemberPath="EventTime" Width="105" />
-                                                    <DataGridTextColumn Header="主策略" Binding="{Binding StrategyName}" SortMemberPath="StrategyName" Width="180" />
-                                                    <DataGridTextColumn Header="策略数" Binding="{Binding StrategyCount}" SortMemberPath="StrategyCount" Width="75" />
-                                                    <DataGridTextColumn Header="命中次数" Binding="{Binding HitCount}" SortMemberPath="HitCount" Width="80" />
-                                                    <DataGridTextColumn Header="强度" Binding="{Binding ScoreText}" SortMemberPath="Score" Width="80" />
-                                                    <DataGridTextColumn Header="命中价" Binding="{Binding PriceText}" SortMemberPath="Price" Width="85" />
-                                                    <DataGridTextColumn Header="事件" Binding="{Binding EventTypeText}" SortMemberPath="EventTypeText" Width="90" />
-                                                    <DataGridTextColumn Header="人工状态" Binding="{Binding ManualStatusText}" SortMemberPath="ManualStatusText" Width="*" MinWidth="105" />
+                                                    <DataGridTextColumn Header="最新命中" Binding="{Binding LatestHitTimeText}" SortMemberPath="EventTime" Width="110" />
+                                                    <DataGridTemplateColumn Header="主策略" Width="210" SortMemberPath="StrategyName">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Border Padding="12,4" Background="#EAF3FF" CornerRadius="12" HorizontalAlignment="Left">
+                                                                    <TextBlock Text="{Binding StrategyName}" Foreground="#2C6DAE" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTextColumn Header="策略数" Binding="{Binding StrategyCount}" SortMemberPath="StrategyCount" Width="76" />
+                                                    <DataGridTextColumn Header="命中次数" Binding="{Binding HitCount}" SortMemberPath="HitCount" Width="86" />
+                                                    <DataGridTextColumn Header="强度" Binding="{Binding ScoreText}" SortMemberPath="Score" Width="90" />
+                                                    <DataGridTextColumn Header="命中价" Binding="{Binding PriceText}" SortMemberPath="Price" Width="95" />
+                                                    <DataGridTemplateColumn Header="事件" Width="120" SortMemberPath="EventTypeText">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Border Padding="12,4" Background="#E7F8EF" BorderBrush="#BFE8CF" BorderThickness="1" CornerRadius="12" HorizontalAlignment="Left">
+                                                                    <TextBlock Text="{Binding EventTypeText}" Foreground="#188052" FontWeight="SemiBold" />
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTemplateColumn Header="人工状态" Width="130" SortMemberPath="ManualStatusText">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Border Padding="12,4" Background="#F2F6FB" BorderBrush="#E2EAF4" BorderThickness="1" CornerRadius="12" HorizontalAlignment="Left">
+                                                                    <TextBlock Text="{Binding ManualStatusText}" Foreground="#637791" FontWeight="SemiBold" />
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTemplateColumn Header="操作" Width="70">
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Button Content="K"
+                                                                        Style="{StaticResource DailyHitKLineButtonStyle}"
+                                                                        Click="OpenOpportunityKLineButton_Click" />
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
                                                 </DataGrid.Columns>
                                             </DataGrid>
-                                            <Border Grid.Row="3" Margin="0,10,0,0" Padding="14,12" Background="#F7F9FC" BorderBrush="#E3EAF1" BorderThickness="1" CornerRadius="5">
+                                            <Border Grid.Row="1" Margin="0,18,0,0" Padding="22,18" Background="#F8FBFF" BorderBrush="#E5EDF7" BorderThickness="1,1,0,0" CornerRadius="0,0,12,12">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="2*" />
-                                                        <ColumnDefinition Width="18" />
+                                                        <ColumnDefinition Width="40" />
                                                         <ColumnDefinition Width="*" />
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel>
-                                                        <TextBlock FontWeight="SemiBold" Text="{Binding SelectedItem.DetailTitle, ElementName=DailyHitDataGrid, TargetNullValue=未选择每日命中}" />
-                                                        <TextBlock Margin="0,6,0,0" Foreground="{StaticResource MutedTextBrush}" Text="{Binding SelectedItem.StrategyText, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" />
-                                                        <TextBlock Margin="0,5,0,0" Foreground="{StaticResource TextBrush}" Text="{Binding SelectedItem.Reason, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" MaxHeight="58" />
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="{Binding SelectedItem.Name, ElementName=DailyHitDataGrid, TargetNullValue=未选择}" />
+                                                            <TextBlock Margin="10,3,0,0" FontSize="13" Foreground="#7F97B5" FontWeight="SemiBold" Text="{Binding SelectedItem.Symbol, ElementName=DailyHitDataGrid, TargetNullValue=--}" />
+                                                            <Border Margin="14,0,0,0" Padding="12,4" Background="#E0ECFF" CornerRadius="12">
+                                                                <TextBlock Text="{Binding SelectedItem.StrategyName, ElementName=DailyHitDataGrid, TargetNullValue=--}" Foreground="#2C6DAE" FontWeight="SemiBold" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                        <TextBlock Margin="0,18,0,0" Text="命中策略" Foreground="#46617F" FontWeight="SemiBold" />
+                                                        <TextBlock Margin="0,8,0,0" Foreground="{StaticResource TextBrush}" Text="{Binding SelectedItem.Reason, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" MaxHeight="72" />
+                                                        <TextBlock Margin="0,10,0,0" Foreground="{StaticResource MutedTextBrush}" Text="{Binding SelectedItem.StrategyText, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" />
                                                     </StackPanel>
                                                     <StackPanel Grid.Column="2">
-                                                        <TextBlock Text="风险与处理" FontWeight="SemiBold" />
-                                                        <TextBlock Margin="0,6,0,0" Foreground="#B42318" Text="{Binding SelectedItem.RiskText, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" MaxHeight="42" />
-                                                        <TextBlock Margin="0,5,0,0" Foreground="{StaticResource MutedTextBrush}" Text="{Binding SelectedItem.ReviewText, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" />
+                                                        <TextBlock Text="风险与处理" Foreground="#46617F" FontWeight="SemiBold" />
+                                                        <Border Margin="0,12,0,0" Padding="16,10" Background="#FFFFFF" BorderBrush="#E5EDF7" BorderThickness="1" CornerRadius="12">
+                                                            <TextBlock Foreground="#B42318" Text="{Binding SelectedItem.RiskText, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" MaxHeight="58" />
+                                                        </Border>
+                                                        <Border Margin="0,10,0,0" Padding="14,7" Background="#FFFFFF" BorderBrush="#E5EDF7" BorderThickness="1" CornerRadius="12">
+                                                            <TextBlock Foreground="{StaticResource MutedTextBrush}" Text="{Binding SelectedItem.ReviewText, ElementName=DailyHitDataGrid, TargetNullValue=--}" TextWrapping="Wrap" />
+                                                        </Border>
                                                     </StackPanel>
                                                 </Grid>
                                             </Border>
