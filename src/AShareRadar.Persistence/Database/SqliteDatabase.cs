@@ -328,6 +328,32 @@ public sealed class SqliteDatabase
                 message TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS auction_watch_pool (
+                trading_date TEXT NOT NULL,
+                reference_trade_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT NOT NULL,
+                source_rank INTEGER NOT NULL,
+                source_score TEXT NOT NULL,
+                source_strategies TEXT NOT NULL,
+                source_hit_time TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (trading_date, symbol)
+            );
+
+            CREATE TABLE IF NOT EXISTS auction_ticks (
+                trading_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                name TEXT NOT NULL,
+                price TEXT NULL,
+                pre_close TEXT NOT NULL,
+                cum_volume TEXT NOT NULL,
+                cum_amount TEXT NOT NULL,
+                quotes_json TEXT NOT NULL,
+                PRIMARY KEY (trading_date, symbol, event_time)
+            );
+
             CREATE INDEX IF NOT EXISTS ix_opportunities_symbol ON opportunities(symbol);
             CREATE INDEX IF NOT EXISTS ix_signal_events_opportunity_id ON signal_events(opportunity_id);
             CREATE INDEX IF NOT EXISTS ix_signal_events_event_time ON signal_events(event_time);
@@ -360,6 +386,8 @@ public sealed class SqliteDatabase
             CREATE INDEX IF NOT EXISTS ix_background_jobs_type_created ON background_jobs(type, created_at);
             CREATE INDEX IF NOT EXISTS ix_background_jobs_status ON background_jobs(status, created_at);
             CREATE INDEX IF NOT EXISTS ix_background_job_logs_job ON background_job_logs(job_id, id);
+            CREATE INDEX IF NOT EXISTS ix_auction_watch_pool_date_rank ON auction_watch_pool(trading_date, source_rank);
+            CREATE INDEX IF NOT EXISTS ix_auction_ticks_date_symbol_time ON auction_ticks(trading_date, symbol, event_time);
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "strategy_hits", "metrics_json", "TEXT NULL");

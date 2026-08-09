@@ -82,6 +82,7 @@ public partial class MainWindow : Window
     private bool _showHistory;
     private bool _showPredictionReview;
     private bool _showStrategyReview;
+    private bool _showAuctionObservation;
     private bool _showStrategyCenter;
     private bool _showLongTermTracking;
     private bool _showBacktest;
@@ -942,6 +943,7 @@ public partial class MainWindow : Window
 
     private async void SignalStreamViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = false;
         _showSectorHeat = false;
         _showConceptHeat = false;
@@ -959,6 +961,7 @@ public partial class MainWindow : Window
 
     private async void SectorHeatViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = false;
         _showSectorHeat = true;
         _showConceptHeat = false;
@@ -976,6 +979,7 @@ public partial class MainWindow : Window
 
     private async void ConceptHeatViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = false;
         _showSectorHeat = false;
         _showConceptHeat = true;
@@ -993,6 +997,7 @@ public partial class MainWindow : Window
 
     private async void MarketSentimentViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = false;
         _showSectorHeat = false;
         _showConceptHeat = false;
@@ -1019,6 +1024,7 @@ public partial class MainWindow : Window
 
     private async void HistoryStatsViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = true;
@@ -1034,6 +1040,7 @@ public partial class MainWindow : Window
 
     private async void PredictionReviewViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
@@ -1049,6 +1056,7 @@ public partial class MainWindow : Window
 
     private async void StrategyCenterViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
@@ -1064,6 +1072,7 @@ public partial class MainWindow : Window
 
     private async void StrategyReviewViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
@@ -1077,8 +1086,30 @@ public partial class MainWindow : Window
         await RefreshStrategyReviewAsync();
     }
 
+    private async void AuctionObservationViewButton_Click(object sender, RoutedEventArgs e)
+    {
+        _showResearchPage = true;
+        _showMarketSentiment = false;
+        _showHistory = false;
+        _showPredictionReview = false;
+        _showStrategyReview = false;
+        _showAuctionObservation = true;
+        _showStrategyCenter = false;
+        _showLongTermTracking = false;
+        _showBacktest = false;
+        _showStockPools = false;
+        ApplyWorkspaceVisibility();
+        await RefreshAuctionObservationAsync();
+    }
+
+    private async void AuctionObservationRefreshButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshAuctionObservationAsync();
+    }
+
     private async void LongTermTrackingViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
@@ -1094,6 +1125,7 @@ public partial class MainWindow : Window
 
     private void BacktestViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
@@ -1108,6 +1140,7 @@ public partial class MainWindow : Window
 
     private async void StockPoolsViewButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
@@ -1123,6 +1156,7 @@ public partial class MainWindow : Window
 
     private async void RealtimePageButton_Click(object sender, RoutedEventArgs e)
     {
+        _showAuctionObservation = false;
         _showResearchPage = false;
         _showSectorHeat = false;
         _showConceptHeat = false;
@@ -2056,6 +2090,12 @@ public partial class MainWindow : Window
             var predictionReviewTask = _showPredictionReview
                 ? _apiClient.GetPredictionReviewAsync(_predictionDate, cancellationToken)
                 : Task.FromResult<PredictionReviewDto?>(null);
+            var auctionObservationTask = _showAuctionObservation
+                ? _apiClient.GetAuctionObservationsAsync(DateOnly.FromDateTime(DateTime.Today), cancellationToken)
+                : Task.FromResult<IReadOnlyList<AuctionObservationDto>>([]);
+            var auctionObservationStatusTask = _showAuctionObservation
+                ? _apiClient.GetAuctionObservationStatusAsync(DateOnly.FromDateTime(DateTime.Today), cancellationToken)
+                : Task.FromResult<AuctionObservationStatusDto?>(null);
 
             await Task.WhenAll([
                 statusTask,
@@ -2076,7 +2116,9 @@ public partial class MainWindow : Window
                 strategyRulesTask,
                 historicalSignalsTask,
                 strategyPerformanceTask,
-                predictionReviewTask
+                predictionReviewTask,
+                auctionObservationTask,
+                auctionObservationStatusTask
             ]);
 
             ApplyStatus(statusTask.Result, marketDataStatusTask.Result);
@@ -2150,6 +2192,11 @@ public partial class MainWindow : Window
             if (_showPredictionReview)
             {
                 ApplyPredictionReview(predictionReviewTask.Result);
+            }
+
+            if (_showAuctionObservation)
+            {
+                ApplyAuctionObservations(auctionObservationTask.Result, auctionObservationStatusTask.Result);
             }
 
             FooterText.Text = $"后端已连接 | 数据源：{BuildMarketDataLabel(marketDataStatusTask.Result)} | 最近刷新：{DateTime.Now:HH:mm:ss}";
@@ -3092,6 +3139,44 @@ public partial class MainWindow : Window
         });
     }
 
+    private async Task RefreshAuctionObservationAsync()
+    {
+        await RunUiActionAsync(async token =>
+        {
+            AuctionObservationStatusText.Text = "正在读取上一交易日命中前50并刷新竞价快照...";
+            var observations = await _apiClient.RefreshAuctionObservationsAsync(token);
+            var status = await _apiClient.GetAuctionObservationStatusAsync(DateOnly.FromDateTime(DateTime.Today), token);
+            ApplyAuctionObservations(observations, status);
+        });
+    }
+
+    private void ApplyAuctionObservations(
+        IReadOnlyList<AuctionObservationDto> observations,
+        AuctionObservationStatusDto? status)
+    {
+        AuctionObservationSummaryText.Text = observations.Count == 0
+            ? "上一交易日没有可用的策略命中数据，当前不生成监控池。"
+            : $"监控 {observations.Count} 只 | 来源：上一交易日策略命中分数前50 | 当前阶段：{status?.Phase ?? observations[0].Phase}";
+        AuctionObservationStatusText.Text = status is null
+            ? "集合竞价数据尚未返回。"
+            : $"参考交易日 {status.ReferenceTradeDate:yyyy-MM-dd} | 最近更新 {status.LastUpdated?.ToLocalTime().ToString("MM-dd HH:mm:ss") ?? "--"} | {status.L2Status} | {status.Message}";
+
+        AuctionObservationDataGrid.ItemsSource = observations
+            .Select(item => new AuctionObservationDisplay(
+                $"{item.Symbol}  {item.Name}",
+                item.SourceRank.ToString(),
+                item.SourceScore.ToString("F1"),
+                string.IsNullOrWhiteSpace(item.SourceStrategies) ? "--" : item.SourceStrategies,
+                item.Status,
+                item.GapPercent.HasValue ? $"{item.GapPercent.Value:+0.00;-0.00;0.00}%" : "--",
+                GetAshareReturnBrush(item.GapPercent),
+                $"{item.Imbalance:P1}",
+                item.RiskScore >= 60m ? $"高 {item.RiskScore:F0}" : item.RiskScore >= 30m ? $"中 {item.RiskScore:F0}" : $"低 {item.RiskScore:F0}",
+                item.OpenConfirmStatus,
+                item.Reason))
+            .ToArray();
+    }
+
     private async Task RefreshLongTermTrackingAsync(CancellationToken cancellationToken = default)
     {
         await RunUiActionAsync(async token =>
@@ -3414,6 +3499,7 @@ public partial class MainWindow : Window
         HistoryStatsPanel.Visibility = _showHistory ? Visibility.Visible : Visibility.Collapsed;
         PredictionReviewPanel.Visibility = _showPredictionReview ? Visibility.Visible : Visibility.Collapsed;
         StrategyReviewPanel.Visibility = _showStrategyReview ? Visibility.Visible : Visibility.Collapsed;
+        AuctionObservationPanel.Visibility = _showAuctionObservation ? Visibility.Visible : Visibility.Collapsed;
         StrategyCenterPanel.Visibility = _showStrategyCenter ? Visibility.Visible : Visibility.Collapsed;
         LongTermTrackingPanel.Visibility = _showLongTermTracking ? Visibility.Visible : Visibility.Collapsed;
         BacktestPanel.Visibility = _showBacktest ? Visibility.Visible : Visibility.Collapsed;
@@ -3449,6 +3535,7 @@ public partial class MainWindow : Window
         HistoryStatsViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         PredictionReviewViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         StrategyReviewViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
+        AuctionObservationViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         LongTermTrackingViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         StrategyCenterViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         BacktestViewButton.Visibility = Visibility.Collapsed;
@@ -3480,6 +3567,9 @@ public partial class MainWindow : Window
             ? (Style)FindResource("ReviewTabSelectedButtonStyle")
             : (Style)FindResource("ReviewTabButtonStyle");
         StrategyReviewViewButton.Style = _showStrategyReview
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
+        AuctionObservationViewButton.Style = _showAuctionObservation
             ? (Style)FindResource("ReviewTabSelectedButtonStyle")
             : (Style)FindResource("ReviewTabButtonStyle");
         LongTermTrackingViewButton.Style = _showLongTermTracking
@@ -4037,6 +4127,8 @@ public partial class MainWindow : Window
         HistoryStatsViewButton.IsEnabled = enabled;
         PredictionReviewViewButton.IsEnabled = enabled;
         StrategyReviewViewButton.IsEnabled = enabled;
+        AuctionObservationViewButton.IsEnabled = enabled;
+        AuctionObservationRefreshButton.IsEnabled = enabled;
         LongTermTrackingViewButton.IsEnabled = enabled;
         StrategyCenterViewButton.IsEnabled = enabled;
         BacktestViewButton.IsEnabled = enabled;
@@ -4678,6 +4770,19 @@ public partial class MainWindow : Window
         public static LongTermTrackingTagDisplay Info(string text) =>
             new(text, new SolidColorBrush(Color.FromRgb(47, 112, 220)), new SolidColorBrush(Color.FromRgb(232, 241, 255)));
     }
+
+    private sealed record AuctionObservationDisplay(
+        string StockText,
+        string SourceRankText,
+        string SourceScoreText,
+        string SourceStrategies,
+        string Status,
+        string GapText,
+        Brush GapBrush,
+        string ImbalanceText,
+        string RiskText,
+        string OpenConfirmStatus,
+        string Reason);
 
     private sealed record StrategyReturnSummaryDisplay(
         string StrategyName,

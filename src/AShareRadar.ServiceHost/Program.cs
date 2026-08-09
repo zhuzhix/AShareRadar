@@ -85,6 +85,9 @@ if (!isFirstServiceHostInstance)
 }
 
 var builder = WebApplication.CreateBuilder(args);
+var localSettingsPath = Path.GetFullPath(
+    Path.Combine(AppContext.BaseDirectory, "..", "..", "config", "appsettings.local.json"));
+builder.Configuration.AddJsonFile(localSettingsPath, optional: true, reloadOnChange: false);
 builder.Logging.ClearProviders();
 builder.Host.UseNLog();
 
@@ -104,6 +107,9 @@ builder.Services.AddSingleton(
 builder.Services.AddSingleton(
     builder.Configuration.GetSection("TradingSession")
         .Get<TradingSessionOptions>() ?? new TradingSessionOptions());
+builder.Services.AddSingleton(
+    builder.Configuration.GetSection("AuctionObservation")
+        .Get<AuctionObservationOptions>() ?? new AuctionObservationOptions());
 builder.Services.AddSingleton(
     builder.Configuration.GetSection("ExternalSentimentAutoUpdate")
         .Get<ExternalSentimentAutoUpdateOptions>() ?? new ExternalSentimentAutoUpdateOptions());
@@ -186,6 +192,9 @@ builder.Services.AddSingleton(
     builder.Configuration.GetSection("EastMoneyQuantDotNet")
         .Get<EastMoneyQuantDotNetOptions>() ?? new EastMoneyQuantDotNetOptions());
 builder.Services.AddSingleton<EastMoneyQuantDotNetClient>();
+builder.Services.AddSingleton<IAuctionDataProvider, EastMoneyQuantDotNetAuctionProvider>();
+builder.Services.AddSingleton<IAuctionObservationStore, SqliteAuctionObservationStore>();
+builder.Services.AddSingleton<AuctionObservationService>();
 builder.Services.AddSingleton<AShareRadar.ServiceHost.Services.StockNameMapSyncService>();
 builder.Services.AddSingleton<IMarketUniverseProvider, EastMoneyQuantUniverseProvider>();
 builder.Services.AddSingleton<EastMoneyQuantDotNetRealtimeProvider>();
@@ -329,6 +338,7 @@ builder.Services.AddHostedService<ExternalSentimentAutoUpdateWorker>();
 builder.Services.AddHostedService<MarketSentimentWorker>();
 builder.Services.AddHostedService<MinuteKLineCacheWorker>();
 builder.Services.AddHostedService<ThirtyMinuteKLineCacheWorker>();
+builder.Services.AddHostedService<AuctionObservationWorker>();
 
 var app = builder.Build();
 
@@ -432,6 +442,50 @@ app.MapGet("/api/market-data/status", (
         options.RequestConcurrency,
         options.SeedSymbols,
         options.RequestTimeoutSeconds);
+});
+
+app.MapGet("/api/auction/observations", (
+    AuctionObservationService auctionObservationService,
+    DateOnly? date) =>
+{
+    var tradingDate = date ?? DateOnly.FromDateTime(DateTime.Today);
+    return auctionObservationService.Query(tradingDate)
+        .Select(MapAuctionObservation)
+        .ToArray();
+});
+
+app.MapGet("/api/auction/status", (
+    AuctionObservationService auctionObservationService,
+    AuctionObservationOptions options,
+    TradingCalendarService tradingCalendarService,
+    DateOnly? date) =>
+{
+    var tradingDate = date ?? DateOnly.FromDateTime(DateTime.Today);
+    var observations = auctionObservationService.Query(tradingDate);
+    var latest = observations
+        .Where(item => item.LatestEventTime.HasValue)
+        .OrderByDescending(item => item.LatestEventTime)
+        .FirstOrDefault();
+    var referenceDate = tradingCalendarService.GetPreviousTradingDate(tradingDate);
+
+    return new AuctionObservationStatusDto(
+        tradingDate,
+        referenceDate,
+        latest?.Phase ?? "未开始",
+        observations.Count,
+        latest?.LatestEventTime,
+        "未开通：仅显示盘口衰减观察",
+        options.Enabled
+            ? "监控池固定为上一交易日策略命中分数前50；集合竞价与策略评分独立"
+            : "集合竞价观察已停用");
+});
+
+app.MapPost("/api/auction/refresh", async (
+    AuctionObservationService auctionObservationService,
+    CancellationToken cancellationToken) =>
+{
+    var observations = await auctionObservationService.RefreshAsync(DateTimeOffset.Now, cancellationToken);
+    return observations.Select(MapAuctionObservation).ToArray();
 });
 
 app.MapGet("/api/market-data/snapshot", async (
@@ -1318,6 +1372,29 @@ static StockQuoteDto MapStockQuote(AShareRadar.Domain.MarketData.StockQuote item
         item.TurnoverRate,
         item.Amount,
         item.QuoteTime);
+}
+
+static AuctionObservationDto MapAuctionObservation(AuctionObservation item)
+{
+    return new AuctionObservationDto(
+        item.TradingDate,
+        item.ReferenceTradeDate,
+        item.Symbol,
+        item.Name,
+        item.SourceRank,
+        item.SourceScore,
+        item.SourceStrategies,
+        item.LatestEventTime,
+        item.Phase,
+        item.ReferencePrice,
+        item.GapPercent,
+        item.Imbalance,
+        item.QueueDecay,
+        item.StrengthScore,
+        item.RiskScore,
+        item.Status,
+        item.OpenConfirmStatus,
+        item.Reason);
 }
 
 static MarketSentimentSnapshotDto MapMarketSentiment(MarketSentimentSnapshot item)

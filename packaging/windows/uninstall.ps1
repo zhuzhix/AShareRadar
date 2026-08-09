@@ -1,5 +1,6 @@
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\AShareRadar",
+    [Parameter(Mandatory = $true)]
+    [string]$InstallDir,
     [switch]$KeepData
 )
 

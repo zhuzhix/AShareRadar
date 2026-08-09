@@ -73,6 +73,18 @@ public sealed class OpportunityAppService
         }
     }
 
+    public IReadOnlyList<SignalEvent> GetEventsForTradingDate(DateOnly tradingDate)
+    {
+        lock (_gate)
+        {
+            return _events
+                .Where(item => DateOnly.FromDateTime(item.EventTime.LocalDateTime) == tradingDate)
+                .OrderByDescending(item => item.Score)
+                .ThenByDescending(item => item.EventTime)
+                .ToArray();
+        }
+    }
+
     public Opportunity? GetOpportunity(Guid id)
     {
         lock (_gate)

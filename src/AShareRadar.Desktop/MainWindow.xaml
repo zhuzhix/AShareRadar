@@ -751,6 +751,7 @@
                                         <Button x:Name="HistoryStatsViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="历史统计" Visibility="Collapsed" Click="HistoryStatsViewButton_Click" />
                                         <Button x:Name="PredictionReviewViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="次日预测" Visibility="Collapsed" Click="PredictionReviewViewButton_Click" />
                                         <Button x:Name="StrategyReviewViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="策略复盘" Visibility="Collapsed" Click="StrategyReviewViewButton_Click" />
+                                        <Button x:Name="AuctionObservationViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="集合竞价" Visibility="Collapsed" Click="AuctionObservationViewButton_Click" />
                                         <Button x:Name="StrategyCenterViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="策略中心" Visibility="Collapsed" Click="StrategyCenterViewButton_Click" />
                                         <Button x:Name="LongTermTrackingViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="长期跟踪" Visibility="Collapsed" Click="LongTermTrackingViewButton_Click" />
                                         <Button x:Name="BacktestViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="策略回放" Visibility="Collapsed" Click="BacktestViewButton_Click" />
@@ -1772,6 +1773,46 @@
                                         </ListBox>
                                     </StackPanel>
                                 </ScrollViewer>
+
+                                <Grid x:Name="AuctionObservationPanel" Grid.Row="1" Margin="0,10,0,0" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.Row="0" Style="{StaticResource ReviewFilterBarStyle}">
+                                        <DockPanel>
+                                            <Button x:Name="AuctionObservationRefreshButton" DockPanel.Dock="Right" Content="刷新竞价" Style="{StaticResource PrimaryButtonStyle}" Click="AuctionObservationRefreshButton_Click" />
+                                            <StackPanel>
+                                                <TextBlock Text="集合竞价辅助观察" FontSize="18" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="AuctionObservationSummaryText" Margin="0,6,0,0" Text="上一交易日策略命中分数前50，独立观察，不参与策略评分。" Foreground="{DynamicResource MutedTextBrush}" />
+                                                <TextBlock x:Name="AuctionObservationStatusText" Margin="0,4,0,0" Text="等待数据" Foreground="{DynamicResource SubtleTextBrush}" FontSize="12" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Margin="0,10,0,0" Style="{StaticResource ReviewCardStyle}">
+                                        <TextBlock Text="集合竞价仅用于开盘前辅助观察；L2 未开通时不计算真实撤单率，盘口衰减只作为风险提示。" Foreground="{DynamicResource WarningBrush}" TextWrapping="Wrap" />
+                                    </Border>
+                                    <DataGrid x:Name="AuctionObservationDataGrid" Grid.Row="2" Margin="0,10,0,0" Style="{StaticResource ReviewDataGridStyle}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" HeadersVisibility="Column">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="股票" Binding="{Binding StockText}" Width="1.2*" />
+                                            <DataGridTextColumn Header="昨日排名" Binding="{Binding SourceRankText}" Width="0.7*" />
+                                            <DataGridTextColumn Header="昨日分数" Binding="{Binding SourceScoreText}" Width="0.8*" />
+                                            <DataGridTextColumn Header="昨日策略" Binding="{Binding SourceStrategies}" Width="1.8*" />
+                                            <DataGridTextColumn Header="竞价状态" Binding="{Binding Status}" Width="1.1*" />
+                                            <DataGridTemplateColumn Header="竞价涨跌" Width="0.9*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding GapText}" Foreground="{Binding GapBrush}" FontWeight="SemiBold" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTextColumn Header="盘口失衡" Binding="{Binding ImbalanceText}" Width="0.9*" />
+                                            <DataGridTextColumn Header="风险" Binding="{Binding RiskText}" Width="0.9*" />
+                                            <DataGridTextColumn Header="开盘确认" Binding="{Binding OpenConfirmStatus}" Width="1.1*" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
 
                                 <Grid x:Name="LongTermTrackingPanel" Grid.Row="1" Margin="0,10,0,0" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                                     <Grid.RowDefinitions>

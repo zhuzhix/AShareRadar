@@ -1,8 +1,11 @@
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\AShareRadar"
+    [string]$InstallDir = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $InstallDir = if (Test-Path -LiteralPath "E:\") { "E:\AShareRadar" } else { Join-Path $env:LOCALAPPDATA "AShareRadar" }
+}
 $PackageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not (Test-Path $InstallDir)) {

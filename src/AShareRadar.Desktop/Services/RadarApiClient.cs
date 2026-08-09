@@ -115,6 +115,34 @@ public sealed class RadarApiClient
             cancellationToken) ?? [];
     }
 
+    public async Task<IReadOnlyList<AuctionObservationDto>> GetAuctionObservationsAsync(
+        DateOnly? tradingDate,
+        CancellationToken cancellationToken)
+    {
+        var path = tradingDate.HasValue
+            ? $"/api/auction/observations?date={Uri.EscapeDataString(tradingDate.Value.ToString("yyyy-MM-dd"))}"
+            : "/api/auction/observations";
+        return await _httpClient.GetFromJsonAsync<AuctionObservationDto[]>(path, cancellationToken) ?? [];
+    }
+
+    public async Task<AuctionObservationStatusDto?> GetAuctionObservationStatusAsync(
+        DateOnly? tradingDate,
+        CancellationToken cancellationToken)
+    {
+        var path = tradingDate.HasValue
+            ? $"/api/auction/status?date={Uri.EscapeDataString(tradingDate.Value.ToString("yyyy-MM-dd"))}"
+            : "/api/auction/status";
+        return await _httpClient.GetFromJsonAsync<AuctionObservationStatusDto>(path, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<AuctionObservationDto>> RefreshAuctionObservationsAsync(
+        CancellationToken cancellationToken)
+    {
+        var response = await _httpClient.PostAsync("/api/auction/refresh", content: null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<AuctionObservationDto[]>(cancellationToken) ?? [];
+    }
+
     public async Task<IReadOnlyList<MappingBoardItemDto>> GetSectorMappingBoardsAsync(
         int count,
         CancellationToken cancellationToken)

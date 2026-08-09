@@ -25,6 +25,7 @@ internal static class ApplicationSmoke
         AssertLimitStatus("002001", "*ST Test", 5.25m, 5.00m, LimitStatus.LimitUp);
         AssertTradingSessionSchedule();
         AssertOpportunityEventsAreStored();
+        AssertAuctionObservationUsesPreviousTradingDayTop50().GetAwaiter().GetResult();
         AssertMarketSentimentUsesLimitPoolWhenAvailable().GetAwaiter().GetResult();
         AssertMarketSentimentFallsBackWhenLimitPoolFails().GetAwaiter().GetResult();
     }
@@ -236,6 +237,52 @@ internal static class ApplicationSmoke
         }
     }
 
+    private static async Task AssertAuctionObservationUsesPreviousTradingDayTop50()
+    {
+        var opportunityService = new OpportunityAppService(new NoopOpportunityStateStore());
+        var signalDate = new DateOnly(2026, 8, 6);
+        var signals = Enumerable.Range(1, 52)
+            .Select(index => new StrategySignal(
+                $"600{index:000}",
+                $"Test {index}",
+                "main-line",
+                "Main Line",
+                StrategyType.IntradayOpportunity,
+                200m - index,
+                10m,
+                "test",
+                null))
+            .ToArray();
+        opportunityService.ApplyStrategySignals(
+            Guid.NewGuid(),
+            signalDate,
+            new DateTimeOffset(2026, 8, 6, 14, 0, 0, TimeSpan.FromHours(8)),
+            signals);
+
+        var store = new InMemoryAuctionObservationStore();
+        var service = new AuctionObservationService(
+            opportunityService,
+            new TradingCalendarService(new TradingCalendarOptions()),
+            new TradingSessionService(new TradingCalendarService(new TradingCalendarOptions()), new TradingSessionOptions()),
+            new FakeAuctionDataProvider(),
+            store,
+            new AuctionObservationOptions());
+
+        var pool = service.EnsureWatchPool(new DateOnly(2026, 8, 7));
+        if (pool.Count != 50 || pool[0].Score != 199m || pool[^1].Score != 150m)
+        {
+            throw new InvalidOperationException($"Auction pool should contain previous trading day's top 50. Count={pool.Count}.");
+        }
+
+        var observations = await service.RefreshAsync(
+            new DateTimeOffset(2026, 8, 7, 9, 20, 0, TimeSpan.FromHours(8)),
+            CancellationToken.None);
+        if (observations.Count != 50 || observations.Any(item => item.ReferenceTradeDate != signalDate))
+        {
+            throw new InvalidOperationException("Auction observation did not preserve the previous trading date boundary.");
+        }
+    }
+
     private sealed class FakeMarketUniverseProvider : IMarketUniverseProvider
     {
         public Task<MarketUniverseSnapshot?> LoadUniverseAsync(CancellationToken cancellationToken)
@@ -309,6 +356,52 @@ internal static class ApplicationSmoke
         public IReadOnlyList<MarketSentimentSnapshot> Query(DateOnly? tradingDate, int count)
         {
             return Latest is null ? [] : [Latest];
+        }
+    }
+
+    private sealed class InMemoryAuctionObservationStore : IAuctionObservationStore
+    {
+        private readonly Dictionary<DateOnly, IReadOnlyList<AuctionWatchItem>> _pools = [];
+        private readonly Dictionary<DateOnly, List<AuctionTickSnapshot>> _ticks = [];
+
+        public void ReplaceWatchPool(DateOnly tradingDate, DateOnly referenceTradeDate, IReadOnlyList<AuctionWatchItem> items)
+        {
+            _pools[tradingDate] = items;
+        }
+
+        public IReadOnlyList<AuctionWatchItem> GetWatchPool(DateOnly tradingDate) =>
+            _pools.GetValueOrDefault(tradingDate) ?? [];
+
+        public void UpsertTicks(DateOnly tradingDate, IReadOnlyList<AuctionTickSnapshot> snapshots)
+        {
+            if (!_ticks.TryGetValue(tradingDate, out var items))
+            {
+                items = [];
+                _ticks[tradingDate] = items;
+            }
+            items.AddRange(snapshots);
+        }
+
+        public IReadOnlyList<AuctionTickSnapshot> GetTicks(DateOnly tradingDate) =>
+            _ticks.GetValueOrDefault(tradingDate) ?? [];
+    }
+
+    private sealed class FakeAuctionDataProvider : IAuctionDataProvider
+    {
+        public Task<IReadOnlyList<AuctionTickSnapshot>> LoadCurrentAuctionAsync(
+            IReadOnlyList<string> symbols,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyList<AuctionTickSnapshot>>(
+                symbols.Select(symbol => new AuctionTickSnapshot(
+                    symbol,
+                    "Test",
+                    new DateTimeOffset(2026, 8, 7, 9, 20, 0, TimeSpan.FromHours(8)),
+                    10.2m,
+                    10m,
+                    100m,
+                    1000m,
+                    [new AuctionQuoteLevel(10.2m, 100m, true), new AuctionQuoteLevel(10.2m, 50m, false)])).ToArray());
         }
     }
 

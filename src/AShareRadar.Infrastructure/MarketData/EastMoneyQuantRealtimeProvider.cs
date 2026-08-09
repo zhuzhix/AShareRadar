@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using AShareRadar.Application.MarketData;
+using AShareRadar.Infrastructure.Runtime;
 using AShareRadar.Domain.MarketData;
 
 namespace AShareRadar.Infrastructure.MarketData;
@@ -41,7 +42,7 @@ public sealed class EastMoneyQuantRealtimeProvider : IMarketDataProvider
             }
         }
 
-        var pythonPath = ResolvePath(_options.PythonPath);
+        var pythonPath = ExecutablePathResolver.Resolve(_options.PythonPath);
         var scriptPath = ResolvePath(_options.RealtimeScriptPath);
         var duckDbPath = ResolvePath(_options.DuckDbPath);
         ValidatePaths(pythonPath, scriptPath, duckDbPath);
@@ -73,7 +74,7 @@ public sealed class EastMoneyQuantRealtimeProvider : IMarketDataProvider
             StandardErrorEncoding = Encoding.UTF8,
             CreateNoWindow = true
         };
-        AddEnvironment(process.StartInfo);
+        AddEnvironment(process.StartInfo, scriptPath);
 
         process.Start();
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -122,8 +123,25 @@ public sealed class EastMoneyQuantRealtimeProvider : IMarketDataProvider
         return result;
     }
 
-    private void AddEnvironment(ProcessStartInfo startInfo)
+    private static void AddLocalPythonPackages(ProcessStartInfo startInfo, string scriptPath)
     {
+        var packageDir = Path.Combine(Path.GetDirectoryName(scriptPath) ?? AppContext.BaseDirectory, ".python_packages");
+        if (!Directory.Exists(packageDir))
+        {
+            return;
+        }
+
+        var existing = startInfo.Environment.TryGetValue("PYTHONPATH", out var current)
+            ? current
+            : Environment.GetEnvironmentVariable("PYTHONPATH");
+        startInfo.Environment["PYTHONPATH"] = string.IsNullOrWhiteSpace(existing)
+            ? packageDir
+            : packageDir + Path.PathSeparator + existing;
+    }
+
+    private void AddEnvironment(ProcessStartInfo startInfo, string scriptPath)
+    {
+        AddLocalPythonPackages(startInfo, scriptPath);
         var tokenName = string.IsNullOrWhiteSpace(_options.TokenEnvironmentVariable)
             ? "EASTMONEY_QUANT_TOKEN"
             : _options.TokenEnvironmentVariable.Trim();
@@ -178,7 +196,7 @@ public sealed class EastMoneyQuantRealtimeProvider : IMarketDataProvider
 
     private static void ValidatePaths(string pythonPath, string scriptPath, string duckDbPath)
     {
-        if (!File.Exists(pythonPath))
+        if (!ExecutablePathResolver.Exists(pythonPath))
         {
             throw new FileNotFoundException("EastMoney Quant Python runtime was not found.", pythonPath);
         }

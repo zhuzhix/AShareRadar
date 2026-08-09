@@ -1,5 +1,5 @@
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\AShareRadar",
+    [string]$InstallDir = "",
     [string]$Token = "",
     [switch]$OverwriteData,
     [switch]$SkipPythonDeps,
@@ -9,6 +9,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $InstallDir = if (Test-Path -LiteralPath "E:\") { "E:\AShareRadar" } else { Join-Path $env:LOCALAPPDATA "AShareRadar" }
+}
 $PackageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 function Test-Command($Name) {
@@ -44,16 +47,43 @@ function Ensure-WingetPackage([string]$Id, [string]$CheckCommand, [string]$Name)
     } $Name
 }
 
+function Refresh-ProcessPath() {
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $parts = @($userPath, $machinePath) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -Unique
+    $env:Path = $parts -join ";"
+}
+
 function Ensure-PythonDeps([string]$InstallRoot) {
     if ($SkipPythonDeps) { return }
     Ensure-WingetPackage "Python.Python.3.12" "python" "Python 3.12"
+    Refresh-ProcessPath
+
+    $python = Get-Command "python" -ErrorAction SilentlyContinue
+    if ($null -eq $python) {
+        throw "Python was installed or detected, but python.exe is not available on PATH. Open a new PowerShell window and rerun install.ps1."
+    }
+
+    $pythonVersion = (& $python.Source -c "import platform, sys; print(f'{sys.version_info.major}.{sys.version_info.minor};{platform.architecture()[0]}')" 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $pythonVersion -notmatch '^3\.12;64bit$') {
+        throw "Python 3.12 64-bit is required for the directory package. Detected: $pythonVersion"
+    }
+    & $python.Source -m pip --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "The detected Python installation does not provide pip. Install Python 3.12 with pip and rerun install.ps1."
+    }
 
     $requirements = Join-Path $InstallRoot "tools\python\requirements.txt"
-    $target = Join-Path $InstallRoot "tools\python\.python_packages"
+    $target = Join-Path $InstallRoot "tools\eastmoney_quant\.python_packages"
     if (Test-Path $requirements) {
         New-Item -ItemType Directory -Path $target -Force | Out-Null
         Invoke-WithRetry {
-            python -m pip install -r $requirements -t $target --upgrade
+            & $python.Source -m pip install -r $requirements -t $target --upgrade
+            if ($LASTEXITCODE -ne 0) {
+                throw "Python dependency installation failed with exit code $LASTEXITCODE."
+            }
         } "Python dependencies"
     }
 }
@@ -131,18 +161,54 @@ function Rewrite-AppSettings([string]$SettingsPath, [string]$InstallRoot) {
     $settings | ConvertTo-Json -Depth 50 | Set-Content -Path $SettingsPath -Encoding UTF8
 }
 
-function Ensure-Token([string]$Value) {
-    if (-not [string]::IsNullOrWhiteSpace($Value)) {
-        [Environment]::SetEnvironmentVariable("EASTMONEY_QUANT_TOKEN", $Value, "User")
-        $env:EASTMONEY_QUANT_TOKEN = $Value
-        return
+function Set-SectionToken($Settings, [string]$SectionName, [string]$Value) {
+    $sectionProperty = $Settings.PSObject.Properties[$SectionName]
+    if ($null -eq $sectionProperty) {
+        $section = [pscustomobject]@{}
+        $Settings | Add-Member -MemberType NoteProperty -Name $SectionName -Value $section
+    }
+    else {
+        $section = $sectionProperty.Value
     }
 
-    if ([string]::IsNullOrWhiteSpace($env:EASTMONEY_QUANT_TOKEN)) {
-        Write-Host "EASTMONEY_QUANT_TOKEN is not set. Realtime SDK calls may fail until it is configured."
-        Write-Host "You can set it later with:"
-        Write-Host "[Environment]::SetEnvironmentVariable('EASTMONEY_QUANT_TOKEN', '<token>', 'User')"
+    if ($section.PSObject.Properties.Name -contains "Token") {
+        $section.Token = $Value
     }
+    else {
+        $section | Add-Member -MemberType NoteProperty -Name Token -Value $Value
+    }
+}
+
+function Ensure-Token([string]$Value, [string]$InstallRoot) {
+    $configDir = Join-Path $InstallRoot "config"
+    $configPath = Join-Path $configDir "appsettings.local.json"
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+
+    if (Test-Path $configPath) {
+        $localSettings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    }
+    else {
+        $localSettings = [pscustomobject]@{}
+    }
+
+    $token = $Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        $token = $env:EASTMONEY_QUANT_TOKEN
+    }
+    if (-not [string]::IsNullOrWhiteSpace($token)) {
+        foreach ($sectionName in @("EastMoneyQuant", "EastMoneyQuantDotNet", "ExternalSentimentSdkUpdate")) {
+            Set-SectionToken $localSettings $sectionName $token
+        }
+        Write-Host "Token saved to $configPath"
+    }
+    elseif (-not (Test-Path $configPath)) {
+        foreach ($sectionName in @("EastMoneyQuant", "EastMoneyQuantDotNet", "ExternalSentimentSdkUpdate")) {
+            Set-SectionToken $localSettings $sectionName ""
+        }
+        Write-Host "Token is not configured. Set it later in $configPath"
+    }
+
+    $localSettings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath -Encoding UTF8
 }
 
 function Create-DesktopShortcut([string]$InstallRoot) {
@@ -183,7 +249,7 @@ if (-not $ConfigureOnly) {
 
 Rewrite-AppSettings (Join-Path $InstallDir "app\service\appsettings.json") $InstallDir
 Ensure-PythonDeps $InstallDir
-Ensure-Token $Token
+Ensure-Token $Token $InstallDir
 if (-not $NoShortcut) {
     Create-DesktopShortcut $InstallDir
 }

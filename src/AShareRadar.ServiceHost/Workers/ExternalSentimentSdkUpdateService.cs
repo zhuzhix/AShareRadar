@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AShareRadar.Infrastructure.Runtime;
 
 namespace AShareRadar.ServiceHost.Workers;
 
@@ -67,7 +68,7 @@ public sealed class ExternalSentimentSdkUpdateService
 
     private async Task RunCoreAsync(CancellationToken cancellationToken)
     {
-        var pythonPath = ResolvePath(_options.PythonPath);
+        var pythonPath = ExecutablePathResolver.Resolve(_options.PythonPath);
         var scriptPath = ResolvePath(_options.ScriptPath);
         ValidatePaths(pythonPath, scriptPath);
 
@@ -167,7 +168,7 @@ public sealed class ExternalSentimentSdkUpdateService
 
     private static void ValidatePaths(string pythonPath, string scriptPath)
     {
-        if (!File.Exists(pythonPath))
+        if (!ExecutablePathResolver.Exists(pythonPath))
         {
             throw new FileNotFoundException("Python runtime not found.", pythonPath);
         }

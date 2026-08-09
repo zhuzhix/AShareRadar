@@ -36,6 +36,26 @@ public sealed class EastMoneyQuantDotNetClient
         }
     }
 
+    public async Task<IReadOnlyList<EastMoneyQuantDotNetAuctionSnapshot>> LoadCurrentAuctionAsync(
+        IReadOnlyList<string> symbols,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled || symbols.Count == 0)
+        {
+            return [];
+        }
+
+        await _sdkLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(() => LoadCurrentAuctionCore(symbols, cancellationToken), cancellationToken);
+        }
+        finally
+        {
+            _sdkLock.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<KLineBar>> LoadKLineAsync(
         string symbol,
         string period,
@@ -149,6 +169,66 @@ public sealed class EastMoneyQuantDotNetClient
                 (decimal)tick.high,
                 (decimal)tick.low,
                 (decimal)tick.cumVolume));
+        }
+
+        return result;
+    }
+
+    private IReadOnlyList<EastMoneyQuantDotNetAuctionSnapshot> LoadCurrentAuctionCore(
+        IReadOnlyList<string> symbols,
+        CancellationToken cancellationToken)
+    {
+        EnsureToken();
+
+        var gmSymbols = symbols
+            .Select(ToGmSymbol)
+            .Where(item => item.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (gmSymbols.Length == 0)
+        {
+            return [];
+        }
+
+        var joined = string.Join(',', gmSymbols);
+        var ticks = GMApi.Current(joined, true);
+        if (ticks.status != 0 || ticks.data is null)
+        {
+            throw new InvalidOperationException($"EastMoney .NET auction current failed. status={ticks.status}; {ticks.statusInfo}");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var names = LoadNames(joined);
+        var preCloses = LoadPreCloses(joined);
+        var result = new List<EastMoneyQuantDotNetAuctionSnapshot>(ticks.data.Count);
+        foreach (var tick in ticks.data)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(tick.symbol))
+            {
+                continue;
+            }
+
+            var code = StockSymbolNormalizer.NormalizeCode(tick.symbol);
+            var quotes = tick.quotes
+                .Take(5)
+                .SelectMany(quote => new[]
+                {
+                    new EastMoneyQuantDotNetAuctionLevel((decimal)quote.bidPrice, (decimal)quote.bidVolume, true),
+                    new EastMoneyQuantDotNetAuctionLevel((decimal)quote.askPrice, (decimal)quote.askVolume, false)
+                })
+                .Where(quote => quote.Price > 0m && quote.Volume >= 0m)
+                .ToArray();
+
+            result.Add(new EastMoneyQuantDotNetAuctionSnapshot(
+                code,
+                names.GetValueOrDefault(tick.symbol, code),
+                tick.createdAt == default ? DateTimeOffset.Now : new DateTimeOffset(DateTime.SpecifyKind(tick.createdAt, DateTimeKind.Local)),
+                tick.price > 0 ? (decimal)tick.price : null,
+                preCloses.GetValueOrDefault(tick.symbol),
+                (decimal)tick.cumVolume,
+                (decimal)tick.cumAmount,
+                quotes));
         }
 
         return result;
@@ -473,3 +553,18 @@ public sealed record EastMoneyQuantDotNetQuote(
     decimal High,
     decimal Low,
     decimal Volume);
+
+public sealed record EastMoneyQuantDotNetAuctionLevel(
+    decimal Price,
+    decimal Volume,
+    bool IsBid);
+
+public sealed record EastMoneyQuantDotNetAuctionSnapshot(
+    string Symbol,
+    string Name,
+    DateTimeOffset EventTime,
+    decimal? Price,
+    decimal PreClose,
+    decimal CumVolume,
+    decimal CumAmount,
+    IReadOnlyList<EastMoneyQuantDotNetAuctionLevel> Quotes);

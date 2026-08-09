@@ -1,8 +1,11 @@
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\AShareRadar"
+    [string]$InstallDir = ""
 )
 
 $ErrorActionPreference = "Continue"
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $InstallDir = if (Test-Path -LiteralPath "E:\") { "E:\AShareRadar" } else { Join-Path $env:LOCALAPPDATA "AShareRadar" }
+}
 
 function Test-Command($Name) {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
@@ -16,19 +19,40 @@ function Write-Check([string]$Name, [bool]$Ok, [string]$Detail = "") {
 $serviceExe = Join-Path $InstallDir "app\service\AShareRadar.ServiceHost.exe"
 $desktopExe = Join-Path $InstallDir "app\desktop\AShareRadar.Desktop.exe"
 $settingsPath = Join-Path $InstallDir "app\service\appsettings.json"
+$localSettingsPath = Join-Path $InstallDir "config\appsettings.local.json"
 $sqlitePath = Join-Path $InstallDir "data\runtime\ashare-radar.sqlite"
 $duckdbPath = Join-Path $InstallDir "data\ashare.duckdb"
+$pythonPackagesPath = Join-Path $InstallDir "tools\eastmoney_quant\.python_packages"
 
 Write-Host "AShareRadar doctor: $InstallDir"
 Write-Check "Install directory" (Test-Path $InstallDir) $InstallDir
 Write-Check "Service executable" (Test-Path $serviceExe) $serviceExe
 Write-Check "Desktop executable" (Test-Path $desktopExe) $desktopExe
 Write-Check "appsettings.json" (Test-Path $settingsPath) $settingsPath
+Write-Check "local settings" (Test-Path $localSettingsPath) $localSettingsPath
 Write-Check "SQLite runtime data" (Test-Path $sqlitePath) $sqlitePath
 Write-Check "DuckDB market data" (Test-Path $duckdbPath) $duckdbPath
 Write-Check "Python command" (Test-Command "python")
 Write-Check "PowerShell command" (Test-Command "powershell")
-Write-Check "EASTMONEY_QUANT_TOKEN" (-not [string]::IsNullOrWhiteSpace($env:EASTMONEY_QUANT_TOKEN))
+Write-Check "Python package directory" (Test-Path $pythonPackagesPath) $pythonPackagesPath
+
+$tokenConfigured = $false
+if (Test-Path $localSettingsPath) {
+    try {
+        $localSettings = Get-Content -LiteralPath $localSettingsPath -Raw | ConvertFrom-Json
+        foreach ($sectionName in @("EastMoneyQuant", "EastMoneyQuantDotNet", "ExternalSentimentSdkUpdate")) {
+            $section = $localSettings.PSObject.Properties[$sectionName].Value
+            if ($null -ne $section -and -not [string]::IsNullOrWhiteSpace([string]$section.Token)) {
+                $tokenConfigured = $true
+                break
+            }
+        }
+    }
+    catch {
+        Write-Check "local settings JSON" $false $_.Exception.Message
+    }
+}
+Write-Check "SDK token" $tokenConfigured $localSettingsPath
 
 foreach ($path in @(
     "tools\eastmoney_quant\update_history_data_gm.py",

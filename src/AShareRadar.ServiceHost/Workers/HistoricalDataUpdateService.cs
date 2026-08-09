@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using AShareRadar.Contracts.History;
+using AShareRadar.Infrastructure.Runtime;
 using AShareRadar.ServiceHost.Services;
 using DuckDB.NET.Data;
 
@@ -99,7 +100,7 @@ public sealed class HistoricalDataUpdateService
         CancellationToken cancellationToken,
         Action<string, bool>? lineSink)
     {
-        var pythonPath = ResolvePath(_options.PythonPath);
+        var pythonPath = ExecutablePathResolver.Resolve(_options.PythonPath);
         var scriptPath = ResolvePath(_options.ScriptPath);
         var dataDir = ResolvePath(_options.DataDir);
 
@@ -307,7 +308,7 @@ public sealed class HistoricalDataUpdateService
 
     private void ValidatePaths(string pythonPath, string scriptPath, string dataDir)
     {
-        if (!File.Exists(pythonPath))
+        if (!ExecutablePathResolver.Exists(pythonPath))
         {
             throw new FileNotFoundException("未找到 Python 运行环境", pythonPath);
         }
