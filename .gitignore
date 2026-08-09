@@ -5,6 +5,11 @@
 artifacts/
 .run/
 .vs/
+.tmp/
+
+# Accidental empty files created from packaging parameter names
+/-HistoricalDuckDbPath
+/-PackageKind
 
 # Logs and smoke-test output
 *.log

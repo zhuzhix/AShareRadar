@@ -8,6 +8,7 @@ namespace AShareRadar.Desktop;
 public sealed class MappingWebViewWindow : Window
 {
     private readonly TextBlock _statusText;
+    private readonly TextBox _addressText;
 
     public MappingWebViewWindow()
     {
@@ -27,15 +28,34 @@ public sealed class MappingWebViewWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             FontSize = 13
         };
+        _addressText = new TextBox
+        {
+            Text = "当前地址：等待页面初始化...",
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = new SolidColorBrush(Color.FromRgb(142, 162, 196)),
+            FontSize = 12,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto
+        };
+
+        var headerContent = new Grid();
+        headerContent.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        headerContent.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        Grid.SetRow(_statusText, 0);
+        Grid.SetRow(_addressText, 1);
+        headerContent.Children.Add(_statusText);
+        headerContent.Children.Add(_addressText);
 
         var header = new Border
         {
-            Height = 44,
-            Padding = new Thickness(14, 0, 14, 0),
+            Height = 68,
+            Padding = new Thickness(14, 6, 14, 6),
             Background = new SolidColorBrush(Color.FromRgb(16, 25, 46)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(37, 52, 85)),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = _statusText
+            Child = headerContent
         };
 
         var root = new DockPanel();
@@ -50,5 +70,13 @@ public sealed class MappingWebViewWindow : Window
     public void SetStatus(string text)
     {
         _statusText.Text = text;
+    }
+
+    public void SetAddress(string? address)
+    {
+        _addressText.Text = $"当前地址：{(string.IsNullOrWhiteSpace(address) ? "about:blank" : address)}";
+        _addressText.ToolTip = address;
+        _addressText.CaretIndex = 0;
+        _addressText.ScrollToHorizontalOffset(0);
     }
 }

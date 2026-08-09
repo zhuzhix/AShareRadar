@@ -290,6 +290,7 @@ public partial class MainWindow : Window
         var stopwatch = Stopwatch.StartNew();
         EventHandler<CoreWebView2NavigationStartingEventArgs>? navigationStartingHandler = null;
         EventHandler<CoreWebView2NavigationCompletedEventArgs>? navigationCompletedHandler = null;
+        EventHandler<CoreWebView2SourceChangedEventArgs>? sourceChangedHandler = null;
 
         try
         {
@@ -297,18 +298,27 @@ public partial class MainWindow : Window
             _activeMappingTraceId = traceId;
             _mappingWebView = mappingWindow.Browser;
             await _mappingWebView.EnsureCoreWebView2Async();
+            mappingWindow.SetAddress(_mappingWebView.CoreWebView2.Source);
             _mappingWebView.CoreWebView2.WebResourceResponseReceived += MappingWebResourceResponseReceived;
             navigationStartingHandler = (_, args) =>
+            {
+                mappingWindow.SetAddress(args.Uri);
                 MappingLogger.Info("WebView2 navigation started. NavigationId={NavigationId} Uri={Uri} TraceId={TraceId}", args.NavigationId, args.Uri, _activeMappingTraceId);
+            };
             navigationCompletedHandler = (_, args) =>
+            {
+                mappingWindow.SetAddress(_mappingWebView.CoreWebView2.Source);
                 MappingLogger.Info(
                     "WebView2 navigation completed. NavigationId={NavigationId} Success={Success} WebErrorStatus={WebErrorStatus} TraceId={TraceId}",
                     args.NavigationId,
                     args.IsSuccess,
                     args.WebErrorStatus,
                     _activeMappingTraceId);
+            };
+            sourceChangedHandler = (_, _) => mappingWindow.SetAddress(_mappingWebView.CoreWebView2.Source);
             _mappingWebView.CoreWebView2.NavigationStarting += navigationStartingHandler;
             _mappingWebView.CoreWebView2.NavigationCompleted += navigationCompletedHandler;
+            _mappingWebView.CoreWebView2.SourceChanged += sourceChangedHandler;
             MappingLogger.Info(
                 "WebView2 initialization completed. RuntimeVersion={RuntimeVersion} UserDataFolder={UserDataFolder} ElapsedMs={ElapsedMs}",
                 _mappingWebView.CoreWebView2.Environment.BrowserVersionString,
@@ -386,6 +396,11 @@ public partial class MainWindow : Window
                 if (navigationCompletedHandler is not null)
                 {
                     _mappingWebView.CoreWebView2.NavigationCompleted -= navigationCompletedHandler;
+                }
+
+                if (sourceChangedHandler is not null)
+                {
+                    _mappingWebView.CoreWebView2.SourceChanged -= sourceChangedHandler;
                 }
             }
 
@@ -490,8 +505,10 @@ public partial class MainWindow : Window
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
+                await WaitForEastMoneyVerificationIfPresentAsync(browser, mappingWindow, traceId, stage, cancellationToken);
                 var body = await NavigateAndReadBodyTextAsync(browser, url, TimeSpan.FromSeconds(30), cancellationToken);
-                if (IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
+                var verification = await ReadEastMoneyVerificationStateAsync(browser, cancellationToken);
+                if (verification.Detected || IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
                 {
                     await WaitForManualEastMoneyVerificationAsync(browser, mappingWindow, traceId, stage, cancellationToken);
                     continue;
@@ -541,11 +558,7 @@ public partial class MainWindow : Window
                 "https://quote.eastmoney.com/center/gridlist.html#concept_board",
                 TimeSpan.FromSeconds(15),
                 cancellationToken);
-            var body = await ReadWebViewBodyTextAsync(browser, cancellationToken);
-            if (IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
-            {
-                await WaitForManualEastMoneyVerificationAsync(browser, mappingWindow, traceId, stage, cancellationToken);
-            }
+            await WaitForEastMoneyVerificationIfPresentAsync(browser, mappingWindow, traceId, stage, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -629,10 +642,10 @@ public partial class MainWindow : Window
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
 
-            string body;
+            EastMoneyVerificationState verification;
             try
             {
-                body = await ReadWebViewBodyTextAsync(browser, cancellationToken);
+                verification = await ReadEastMoneyVerificationStateAsync(browser, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -640,7 +653,13 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            if (!IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
+            if (!verification.Detected)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken);
+                verification = await ReadEastMoneyVerificationStateAsync(browser, cancellationToken);
+            }
+
+            if (!verification.Detected)
             {
                 MappingLogger.Info(
                     "EastMoney verification challenge cleared. TraceId={TraceId} Stage={Stage} WaitSeconds={WaitSeconds} Uri={Uri}",
@@ -656,6 +675,94 @@ public partial class MainWindow : Window
         }
 
         throw new TimeoutException("等待东方财富滑动验证超时，请重新点击更新概念后在弹出窗口中完成验证。");
+    }
+
+    private async Task WaitForEastMoneyVerificationIfPresentAsync(
+        WebView2 browser,
+        MappingWebViewWindow mappingWindow,
+        string traceId,
+        string stage,
+        CancellationToken cancellationToken)
+    {
+        var verification = await ReadEastMoneyVerificationStateAsync(browser, cancellationToken);
+        if (!verification.Detected)
+        {
+            return;
+        }
+
+        MappingLogger.Warn(
+            "EastMoney verification DOM matched. TraceId={TraceId} Stage={Stage} Reason={Reason} Title={Title} Uri={Uri} Frames={Frames} BodyPreview={BodyPreview}",
+            traceId,
+            stage,
+            verification.Reason,
+            verification.Title,
+            browser.CoreWebView2.Source,
+            verification.Frames,
+            verification.BodyPreview);
+        await WaitForManualEastMoneyVerificationAsync(browser, mappingWindow, traceId, stage, cancellationToken);
+    }
+
+    private static async Task<EastMoneyVerificationState> ReadEastMoneyVerificationStateAsync(
+        WebView2 browser,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        const string script = """
+            (() => {
+                const terms = ['滑动验证', '安全验证', '请拖动', '拖动滑块', '拖动下方滑块', '拖动左边滑块', '完成拼图', '验证码', '访问异常', '操作过于频繁'];
+                const markers = ['captcha', 'verify', 'challenge', 'slide-verify', 'slider-captcha', 'nc_', 'nc1', 'jdjrv'];
+                const title = document.title || '';
+                const body = document.body ? (document.body.innerText || '') : '';
+                const frames = Array.from(document.querySelectorAll('iframe')).map(frame =>
+                    [frame.src, frame.id, frame.name, frame.className, frame.title].filter(Boolean).join('|'));
+                const candidateNodes = Array.from(document.querySelectorAll('[id], [class], [title], [aria-label], iframe'));
+                const visibleFrame = Array.from(document.querySelectorAll('iframe')).find(frame => {
+                    const rect = frame.getBoundingClientRect();
+                    const style = getComputedStyle(frame);
+                    return rect.width >= 260 && rect.width <= 700 && rect.height >= 180 && rect.height <= 700
+                        && rect.left >= window.innerWidth * 0.15 && rect.top >= window.innerHeight * 0.08
+                        && Math.abs((rect.left + rect.right) / 2 - window.innerWidth / 2) <= window.innerWidth * 0.2
+                        && rect.right <= window.innerWidth + 2
+                        && rect.bottom <= window.innerHeight + 2 && style.display !== 'none'
+                        && style.visibility !== 'hidden' && Number(style.zIndex || 0) >= 10;
+                });
+                const visibleOverlay = Array.from(document.querySelectorAll('body *')).find(node => {
+                    const rect = node.getBoundingClientRect();
+                    const style = getComputedStyle(node);
+                    return rect.width >= 260 && rect.width <= 760 && rect.height >= 180 && rect.height <= 760
+                        && rect.left > window.innerWidth * 0.15 && rect.top > window.innerHeight * 0.08
+                        && Math.abs((rect.left + rect.right) / 2 - window.innerWidth / 2) <= window.innerWidth * 0.2
+                        && style.position === 'fixed'
+                        && style.display !== 'none' && style.visibility !== 'hidden'
+                        && Number(style.zIndex || 0) >= 10;
+                });
+                const attributes = candidateNodes.map(node =>
+                    [node.id, node.className, node.title, node.getAttribute('aria-label'), node.getAttribute('src')]
+                        .filter(value => typeof value === 'string' && value.length > 0).join('|')).join('\n');
+                const shadowText = candidateNodes.filter(node => node.shadowRoot)
+                    .map(node => node.shadowRoot.innerText || node.shadowRoot.textContent || '').join('\n');
+                const textHaystack = `${title}\n${body}\n${shadowText}`.toLowerCase();
+                const domHaystack = `${frames.join('\n')}\n${attributes}`.toLowerCase();
+                const textTerm = terms.find(term => textHaystack.includes(term.toLowerCase()));
+                const marker = markers.find(term => domHaystack.includes(term));
+                return {
+                    detected: Boolean(textTerm || marker || visibleFrame || visibleOverlay),
+                    reason: textTerm ? `text:${textTerm}` : (marker ? `dom:${marker}` : (visibleFrame ? 'visible-verification-iframe' : (visibleOverlay ? 'visible-verification-overlay' : ''))),
+                    title,
+                    frames: frames.slice(0, 20).join('; '),
+                    bodyPreview: body.slice(0, 500)
+                };
+            })()
+            """;
+        var raw = await browser.ExecuteScriptAsync(script);
+        using var document = JsonDocument.Parse(raw);
+        var root = document.RootElement;
+        return new EastMoneyVerificationState(
+            root.TryGetProperty("detected", out var detected) && detected.GetBoolean(),
+            root.TryGetProperty("reason", out var reason) ? reason.GetString() ?? string.Empty : string.Empty,
+            root.TryGetProperty("title", out var title) ? title.GetString() ?? string.Empty : string.Empty,
+            root.TryGetProperty("frames", out var frames) ? frames.GetString() ?? string.Empty : string.Empty,
+            root.TryGetProperty("bodyPreview", out var preview) ? preview.GetString() ?? string.Empty : string.Empty);
     }
 
     private static bool IsEastMoneyVerificationPage(string body, string? uri)
@@ -675,10 +782,20 @@ public partial class MainWindow : Window
             || body.Contains("安全验证", StringComparison.OrdinalIgnoreCase)
             || body.Contains("请拖动", StringComparison.OrdinalIgnoreCase)
             || body.Contains("拖动滑块", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("拖动下方滑块", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("拖动左边滑块", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("完成拼图", StringComparison.OrdinalIgnoreCase)
             || body.Contains("验证码", StringComparison.OrdinalIgnoreCase)
             || body.Contains("captcha", StringComparison.OrdinalIgnoreCase)
             || body.Contains("verify", StringComparison.OrdinalIgnoreCase);
     }
+
+    private sealed record EastMoneyVerificationState(
+        bool Detected,
+        string Reason,
+        string Title,
+        string Frames,
+        string BodyPreview);
 
     private static string NormalizeEastMoneyJson(string body)
     {
