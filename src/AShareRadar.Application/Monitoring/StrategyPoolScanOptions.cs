@@ -8,6 +8,8 @@ public sealed class StrategyPoolScanOptions
 
     public bool RunObservationOnStartup { get; set; } = true;
 
+    public string DailyObservationRunAfterTime { get; set; } = "15:20";
+
     public string[] RealtimeStrategyCodes { get; set; } =
     [
         "main-sector-resonance",

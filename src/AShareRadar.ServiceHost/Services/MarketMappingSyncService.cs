@@ -8,12 +8,17 @@ namespace AShareRadar.ServiceHost.Services;
 public sealed class MarketMappingSyncService
 {
     private readonly ISectorHeatService _sectorHeatService;
+    private readonly IHeatSnapshotStore _heatSnapshotStore;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ILogger<MarketMappingSyncService> _logger;
 
-    public MarketMappingSyncService(ISectorHeatService sectorHeatService, ILogger<MarketMappingSyncService> logger)
+    public MarketMappingSyncService(
+        ISectorHeatService sectorHeatService,
+        IHeatSnapshotStore heatSnapshotStore,
+        ILogger<MarketMappingSyncService> logger)
     {
         _sectorHeatService = sectorHeatService;
+        _heatSnapshotStore = heatSnapshotStore;
         _logger = logger;
     }
 
@@ -73,10 +78,20 @@ public sealed class MarketMappingSyncService
             _logger.LogInformation("Mapping files replaced. TraceId={TraceId}", request.Version);
 
             _sectorHeatService.ReloadMappings();
+            var sectorBatch = _heatSnapshotStore.SaveMappingSnapshot(
+                "sector",
+                request.UpdatedAt,
+                "EastMoney-WebView2",
+                BuildMappingSnapshotItems(sectors));
+            var conceptBatch = _heatSnapshotStore.SaveMappingSnapshot(
+                "concept",
+                request.UpdatedAt,
+                "EastMoney-WebView2",
+                BuildMappingSnapshotItems(concepts));
             var sectorStatus = _sectorHeatService.GetMappingStatus();
             var conceptStatus = _sectorHeatService.GetConceptMappingStatus();
             _logger.LogInformation(
-                "Mapping sync completed. TraceId={TraceId} SectorRows={SectorRows} ConceptRows={ConceptRows} LoadedSectorRows={LoadedSectorRows} LoadedConceptRows={LoadedConceptRows} SectorMode={SectorMode} ConceptMode={ConceptMode} ElapsedMs={ElapsedMs}",
+                "Mapping sync completed. TraceId={TraceId} SectorRows={SectorRows} ConceptRows={ConceptRows} LoadedSectorRows={LoadedSectorRows} LoadedConceptRows={LoadedConceptRows} SectorMode={SectorMode} ConceptMode={ConceptMode} SectorBatchId={SectorBatchId} ConceptBatchId={ConceptBatchId} ElapsedMs={ElapsedMs}",
                 request.Version,
                 sectors.Count,
                 concepts.Count,
@@ -84,6 +99,8 @@ public sealed class MarketMappingSyncService
                 conceptStatus.MappingCount,
                 sectorStatus.Source,
                 conceptStatus.Source,
+                sectorBatch.Id,
+                conceptBatch.Id,
                 stopwatch.ElapsedMilliseconds);
             return new(true, request.Version, sectors.Count, concepts.Count, "行业概念映射已更新。");
         }
@@ -118,6 +135,25 @@ public sealed class MarketMappingSyncService
         writer.WriteLine($"symbol,{kind}_code,{kind}_name,source,updated_at");
         foreach (var row in rows)
             writer.WriteLine($"{row.Symbol},{Escape(row.Code)},{Escape(row.Name)},EastMoney-WebView2,{updatedAt:yyyy-MM-dd HH:mm:ss}");
+    }
+
+    private static IReadOnlyList<MappingSnapshotItem> BuildMappingSnapshotItems(IReadOnlyList<MarketMappingRowDto> rows)
+    {
+        var boardRanks = rows
+            .Select(row => (row.Code, row.Name))
+            .Distinct()
+            .Select((board, index) => new { board.Code, board.Name, Rank = index + 1 })
+            .ToDictionary(item => (item.Code, item.Name), item => item.Rank);
+
+        return rows
+            .Select(row => new MappingSnapshotItem(
+                row.Code,
+                row.Name,
+                boardRanks.TryGetValue((row.Code, row.Name), out var rank) ? rank : 0,
+                row.Symbol,
+                null,
+                "EastMoney-WebView2"))
+            .ToArray();
     }
 
     private static string Escape(string value) => value.Contains(',') || value.Contains('"')

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using AShareRadar.Application.Backtesting;
 using AShareRadar.Application.History;
 using AShareRadar.Application.Indicators;
@@ -25,6 +25,7 @@ using AShareRadar.Persistence.Jobs;
 using AShareRadar.Persistence.MarketData;
 using AShareRadar.Persistence.Opportunities;
 using AShareRadar.Persistence.Review;
+using AShareRadar.Persistence.Strategies;
 using AShareRadar.ServiceHost.Hubs;
 using AShareRadar.ServiceHost.Jobs;
 using AShareRadar.ServiceHost.Realtime;
@@ -36,6 +37,52 @@ using DuckDB.NET.Data;
 using NLog.Web;
 
 System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
+const string ServiceHostSingleInstanceMutexName = @"Local\AShareRadar.ServiceHost";
+var eastMoneyFirstLevelIndustryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    "传媒",
+    "电力设备",
+    "电子",
+    "房地产",
+    "纺织服饰",
+    "非银金融",
+    "公用事业",
+    "国防军工",
+    "钢铁",
+    "环保",
+    "交通运输",
+    "基础化工",
+    "家用电器",
+    "建筑材料",
+    "建筑装饰",
+    "机械设备",
+    "计算机",
+    "煤炭",
+    "美容护理",
+    "农林牧渔",
+    "汽车",
+    "轻工制造",
+    "商贸零售",
+    "石油石化",
+    "社会服务",
+    "食品饮料",
+    "通信",
+    "医药生物",
+    "有色金属",
+    "银行",
+    "综合"
+};
+using var serviceHostSingleInstanceMutex = new Mutex(
+    initiallyOwned: true,
+    name: ServiceHostSingleInstanceMutexName,
+    createdNew: out var isFirstServiceHostInstance);
+
+if (!isFirstServiceHostInstance)
+{
+    ReportDuplicateServiceHost(ServiceHostSingleInstanceMutexName);
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
@@ -71,6 +118,7 @@ builder.Services.AddSingleton<BackgroundJobService>();
 builder.Services.AddSingleton<SqliteOpportunityStateStore>();
 builder.Services.AddSingleton<IHistoryQueryService, SqliteHistoryQueryService>();
 builder.Services.AddSingleton<IMarketSentimentStore, SqliteMarketSentimentStore>();
+builder.Services.AddSingleton<IHeatSnapshotStore, SqliteHeatSnapshotStore>();
 builder.Services.AddSingleton<IMarketSentimentExternalDataProvider, ConfiguredMarketSentimentExternalDataProvider>();
 builder.Services.AddSingleton<ILimitPoolProvider>(services =>
 {
@@ -107,6 +155,12 @@ builder.Services.AddSingleton<MonitorAppService>();
 builder.Services.AddSingleton<OpportunityAppService>();
 builder.Services.AddSingleton<ReviewAppService>();
 builder.Services.AddSingleton<PredictionReviewService>();
+builder.Services.AddSingleton<ISignalHeatContextStore, SqliteSignalHeatContextStore>();
+builder.Services.AddSingleton<SignalHeatContextService>();
+builder.Services.AddSingleton<ISignalReturnStatsStore, SqliteSignalReturnStatsStore>();
+builder.Services.AddSingleton<SignalReturnStatsService>();
+builder.Services.AddSingleton<IStrategyVersionStore, SqliteStrategyVersionStore>();
+builder.Services.AddSingleton<StrategyVersionService>();
 builder.Services.AddSingleton<ILongTermTrackingStore, SqliteLongTermTrackingStore>();
 builder.Services.AddSingleton<LongTermTrackingService>();
 builder.Services.AddSingleton<BacktestReplayService>();
@@ -132,6 +186,7 @@ builder.Services.AddSingleton(
     builder.Configuration.GetSection("EastMoneyQuantDotNet")
         .Get<EastMoneyQuantDotNetOptions>() ?? new EastMoneyQuantDotNetOptions());
 builder.Services.AddSingleton<EastMoneyQuantDotNetClient>();
+builder.Services.AddSingleton<AShareRadar.ServiceHost.Services.StockNameMapSyncService>();
 builder.Services.AddSingleton<IMarketUniverseProvider, EastMoneyQuantUniverseProvider>();
 builder.Services.AddSingleton<EastMoneyQuantDotNetRealtimeProvider>();
 builder.Services.AddSingleton<EastMoneyQuantRealtimeProvider>();
@@ -230,8 +285,6 @@ builder.Services.AddSingleton<ISignalStrategy, LongSupportReboundStrategy>();
 builder.Services.AddSingleton<ISignalStrategy, StrongTrendContinuationStrategy>();
 builder.Services.AddSingleton<ISignalStrategy, CounterTrendStrengthStrategy>();
 builder.Services.AddSingleton<ISignalStrategy, StrongRepairReboundStrategy>();
-builder.Services.AddSingleton<ISignalStrategy, DreamerDaAStrategy>();
-builder.Services.AddSingleton<ISignalStrategy, ZhongheYingtaiMainriseStrategy>();
 builder.Services.AddSingleton<IStrategyRegistry, StrategyRegistry>();
 builder.Services.AddSingleton<IRealtimeEventPublisher, SignalRRealtimeEventPublisher>();
 var historicalDataUpdateOptions = builder.Configuration
@@ -356,7 +409,13 @@ app.MapGet("/api/monitor/status", (MonitorAppService monitorAppService) =>
         status.LastHistoricalStrategyScanTime,
         status.NextHistoricalStrategyScanTime,
         status.HistoricalStrategyScanSymbolCount,
-        status.HistoricalStrategyScanSignalCount);
+        status.HistoricalStrategyScanSignalCount,
+        status.RealtimePoolStatus,
+        status.ObservationPoolStatus,
+        status.RealtimePoolSignalCount,
+        status.ObservationPoolSignalCount,
+        status.PlatformBreakoutAlertCount,
+        status.PlatformBreakoutConfirmedCount);
 });
 
 app.MapGet("/api/market-data/status", (
@@ -423,6 +482,17 @@ app.MapGet("/api/market-data/sector-mapping/status", (ISectorHeatService sectorH
     return sectorHeatService.GetMappingStatus();
 });
 
+app.MapGet("/api/market-data/sector-mapping/boards", (ISectorHeatService sectorHeatService, int? count) =>
+{
+    var takeCount = Math.Clamp(count ?? 1000, 1, 5000);
+    var status = sectorHeatService.GetMappingStatus();
+    return ReadMappingBoardsFromCsv(status.MappingPath, 5000)
+        .Where(item => eastMoneyFirstLevelIndustryNames.Contains(item.Name))
+        .Take(takeCount)
+        .Select((item, index) => new MappingBoardItemDto(item.Code, item.Name, item.StockCount, index + 1))
+        .ToArray();
+});
+
 app.MapGet("/api/market-data/concepts", async (
     IMarketDataProvider marketDataProvider,
     ISectorHeatService sectorHeatService,
@@ -454,6 +524,48 @@ app.MapGet("/api/market-data/concepts", async (
 app.MapGet("/api/market-data/concept-mapping/status", (ISectorHeatService sectorHeatService) =>
 {
     return sectorHeatService.GetConceptMappingStatus();
+});
+
+app.MapGet("/api/market-data/concept-mapping/boards", (ISectorHeatService sectorHeatService, int? count) =>
+{
+    var takeCount = Math.Clamp(count ?? 100, 1, 5000);
+    var status = sectorHeatService.GetConceptMappingStatus();
+    return ReadMappingBoardsFromCsv(status.MappingPath, takeCount);
+});
+
+app.MapGet("/api/market-data/heat-snapshots/latest", (IHeatSnapshotStore store, int? sectorCount, int? conceptCount) =>
+{
+    var snapshot = store.GetLatestHeatSnapshot(
+        Math.Clamp(sectorCount ?? 20, 0, 5000),
+        Math.Clamp(conceptCount ?? 20, 0, 5000));
+    return snapshot is null
+        ? Results.NotFound()
+        : Results.Ok(MapHeatSnapshotOverview(snapshot));
+});
+
+app.MapGet("/api/market-data/heat-snapshots/by-time", (IHeatSnapshotStore store, DateTimeOffset time, int? sectorCount, int? conceptCount) =>
+{
+    var snapshot = store.GetHeatSnapshotAt(
+        time,
+        Math.Clamp(sectorCount ?? 20, 0, 5000),
+        Math.Clamp(conceptCount ?? 20, 0, 5000));
+    return snapshot is null
+        ? Results.NotFound()
+        : Results.Ok(MapHeatSnapshotOverview(snapshot));
+});
+
+app.MapGet("/api/market-data/mapping-snapshots/latest", (IHeatSnapshotStore store, string type) =>
+{
+    if (!string.Equals(type, "sector", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(type, "concept", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest("type must be sector or concept.");
+    }
+
+    var snapshot = store.GetLatestMappingSnapshot(type);
+    return snapshot is null
+        ? Results.NotFound()
+        : Results.Ok(MapMappingSnapshotBatch(snapshot));
 });
 
 
@@ -613,7 +725,10 @@ app.MapGet("/api/opportunities", async (
         .ToArray();
 });
 
-app.MapGet("/api/opportunities/{id:guid}", (Guid id, OpportunityAppService opportunityAppService) =>
+app.MapGet("/api/opportunities/{id:guid}", (
+    Guid id,
+    OpportunityAppService opportunityAppService,
+    ISignalHeatContextStore signalHeatContextStore) =>
 {
     var opportunity = opportunityAppService.GetOpportunity(id);
     if (opportunity is null)
@@ -621,12 +736,14 @@ app.MapGet("/api/opportunities/{id:guid}", (Guid id, OpportunityAppService oppor
         return Results.NotFound();
     }
 
-    var events = opportunityAppService.GetEventsForOpportunity(id, 20)
-        .Select(item => MapSignalEvent(item))
+    var sourceEvents = opportunityAppService.GetEventsForOpportunity(id, 20);
+    var heatContextsByEvent = signalHeatContextStore.GetByEventIds(sourceEvents.Select(item => item.Id));
+    var events = sourceEvents
+        .Select(item => MapSignalEvent(item, null, heatContextsByEvent))
         .ToArray();
 
     return Results.Ok(new OpportunityDetailDto(
-        MapOpportunity(opportunity),
+        MapOpportunity(opportunity, latestEvent: sourceEvents.FirstOrDefault()),
         events.FirstOrDefault(),
         events));
 });
@@ -653,6 +770,7 @@ app.MapPost("/api/maintenance/opportunities/archive-missing-events", (Opportunit
 app.MapGet("/api/signals/events", async (
     OpportunityAppService opportunityAppService,
     IMarketDataProvider marketDataProvider,
+    ISignalHeatContextStore signalHeatContextStore,
     int? count,
     CancellationToken cancellationToken) =>
 {
@@ -661,8 +779,27 @@ app.MapGet("/api/signals/events", async (
         ? await LoadStockNamesAsync(marketDataProvider, app.Configuration, cancellationToken)
         : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+    var heatContextsByEvent = signalHeatContextStore.GetByEventIds(events.Select(item => item.Id));
     return events
-        .Select(item => MapSignalEvent(item, stockNames))
+        .Select(item => MapSignalEvent(item, stockNames, heatContextsByEvent))
+        .ToArray();
+});
+
+app.MapGet("/api/signals/events/{eventId:guid}/heat-context", (
+    Guid eventId,
+    ISignalHeatContextStore signalHeatContextStore) =>
+{
+    return signalHeatContextStore.GetByEventId(eventId)
+        .Select(MapSignalHeatContext)
+        .ToArray();
+});
+
+app.MapGet("/api/signals/events/{eventId:guid}/strategy-versions", (
+    Guid eventId,
+    StrategyVersionService strategyVersionService) =>
+{
+    return strategyVersionService.GetHitVersions(eventId)
+        .Select(MapStrategyHitVersion)
         .ToArray();
 });
 
@@ -789,6 +926,22 @@ app.MapGet("/api/strategies", (IStrategyRegistry strategyRegistry) =>
         .ToArray();
 });
 
+app.MapGet("/api/strategies/versions", (StrategyVersionService strategyVersionService) =>
+{
+    return strategyVersionService.QueryVersions()
+        .Select(MapStrategyVersion)
+        .ToArray();
+});
+
+app.MapGet("/api/strategies/{strategyCode}/versions", (
+    string strategyCode,
+    StrategyVersionService strategyVersionService) =>
+{
+    return strategyVersionService.QueryVersions(strategyCode)
+        .Select(MapStrategyVersion)
+        .ToArray();
+});
+
 app.MapGet("/api/review/today", (ReviewAppService reviewAppService) =>
 {
     var review = reviewAppService.BuildTodayReview();
@@ -895,6 +1048,74 @@ app.MapGet("/api/review/long-term-tracking/{symbol}/timeline", (
     var stockNames = LoadHistoricalStockNames(configuration);
     return longTermTrackingService.QueryTimeline(symbol, count ?? 200)
         .Select(item => MapLongTermTrackingTimelineItem(item, stockNames))
+        .ToArray();
+});
+
+app.MapGet("/api/review/signal-returns/horizons", (SignalReturnStatsService signalReturnStatsService) =>
+{
+    return signalReturnStatsService.GetHorizons()
+        .Select(MapSignalReturnHorizon)
+        .ToArray();
+});
+
+app.MapPost("/api/review/signal-returns/recalculate", async (
+    SignalReturnRecalculateRequestDto request,
+    SignalReturnStatsService signalReturnStatsService,
+    CancellationToken cancellationToken) =>
+{
+    var result = await signalReturnStatsService.RecalculateAsync(
+        new SignalReturnRecalculateRequest(ToSignalReturnQuery(request)),
+        cancellationToken);
+    return MapSignalReturnRecalculateResult(result);
+});
+
+app.MapGet("/api/review/signal-returns/records", (
+    SignalReturnStatsService signalReturnStatsService,
+    DateOnly? fromDate,
+    DateOnly? toDate,
+    string? symbol,
+    string? strategyCode,
+    string? strategyGroup,
+    string? strategyVersion,
+    string? horizonGroup,
+    string? horizonCode,
+    string? status,
+    int? count) =>
+{
+    return MapSignalReturnQueryResult(signalReturnStatsService.QueryRecords(new SignalReturnQuery(
+        fromDate,
+        toDate,
+        symbol,
+        strategyCode,
+        strategyGroup,
+        strategyVersion,
+        horizonGroup,
+        horizonCode,
+        status,
+        count ?? 200)));
+});
+
+app.MapGet("/api/review/signal-returns/summary", (
+    SignalReturnStatsService signalReturnStatsService,
+    DateOnly? fromDate,
+    DateOnly? toDate,
+    string? strategyCode,
+    string? strategyGroup,
+    string? strategyVersion,
+    string? horizonGroup,
+    string? horizonCode,
+    int? count) =>
+{
+    return signalReturnStatsService.QueryStrategySummaries(new SignalReturnSummaryQuery(
+            fromDate,
+            toDate,
+            strategyCode,
+            strategyGroup,
+            strategyVersion,
+            horizonGroup,
+            horizonCode,
+            count ?? 100))
+        .Select(MapSignalReturnStrategySummary)
         .ToArray();
 });
 
@@ -1026,8 +1247,14 @@ static BackgroundJobLogDto MapBackgroundJobLog(AShareRadar.Application.Jobs.Back
 
 static SignalEventDto MapSignalEvent(
     AShareRadar.Domain.Opportunities.SignalEvent item,
-    IReadOnlyDictionary<string, string>? stockNames = null)
+    IReadOnlyDictionary<string, string>? stockNames = null,
+    IReadOnlyDictionary<Guid, IReadOnlyList<SignalHeatContext>>? heatContextsByEvent = null)
 {
+    var heatContexts = heatContextsByEvent is not null
+        && heatContextsByEvent.TryGetValue(item.Id, out var eventHeatContexts)
+            ? eventHeatContexts.Select(MapSignalHeatContext).ToArray()
+            : [];
+
     return new SignalEventDto(
         item.Id,
         item.OpportunityId,
@@ -1055,7 +1282,29 @@ static SignalEventDto MapSignalEvent(
                 hit.FailedConditions,
                 hit.StopLossPrice,
                 hit.TakeProfitPrice))
-            .ToArray());
+            .ToArray(),
+        heatContexts);
+}
+
+static SignalHeatContextDto MapSignalHeatContext(SignalHeatContext item)
+{
+    return new SignalHeatContextDto(
+        item.EventId,
+        item.Symbol,
+        item.EventTime,
+        item.ContextType,
+        item.Code,
+        item.Name,
+        item.HeatRank,
+        item.StockCount,
+        item.RisingCount,
+        item.AverageChangePercent,
+        item.RisingRatioPercent,
+        item.TotalAmount,
+        item.HeatScore,
+        item.IsLeader,
+        item.HeatSnapshotBatchId,
+        item.CreatedAt);
 }
 
 static StockQuoteDto MapStockQuote(AShareRadar.Domain.MarketData.StockQuote item)
@@ -1380,6 +1629,132 @@ static LongTermTrackingTimelineItemDto MapLongTermTrackingTimelineItem(
         item.Risk);
 }
 
+static SignalReturnQuery ToSignalReturnQuery(SignalReturnRecalculateRequestDto request)
+{
+    return new SignalReturnQuery(
+        request.FromDate,
+        request.ToDate,
+        request.Symbol,
+        request.StrategyCode,
+        request.StrategyGroup,
+        request.StrategyVersion,
+        request.HorizonGroup,
+        request.HorizonCode,
+        request.Status,
+        request.Count <= 0 ? 1000 : request.Count);
+}
+
+static SignalReturnHorizonDto MapSignalReturnHorizon(SignalReturnHorizon item)
+{
+    return new SignalReturnHorizonDto(
+        item.Code,
+        item.Name,
+        item.TradingDays,
+        item.Group);
+}
+
+static SignalReturnRecalculateResultDto MapSignalReturnRecalculateResult(SignalReturnRecalculateResult item)
+{
+    return new SignalReturnRecalculateResultDto(
+        item.CalculatedAt,
+        item.SourceSignalCount,
+        item.ProcessedSignalCount,
+        item.SkippedSignalCount,
+        item.FailedSignalCount,
+        item.RecordCount);
+}
+
+static SignalReturnQueryResultDto MapSignalReturnQueryResult(SignalReturnQueryResult item)
+{
+    return new SignalReturnQueryResultDto(
+        item.TotalCount,
+        item.Items.Select(MapSignalReturnRecord).ToArray());
+}
+
+static SignalReturnRecordDto MapSignalReturnRecord(SignalReturnRecord item)
+{
+    return new SignalReturnRecordDto(
+        item.EventId,
+        item.OpportunityId,
+        item.EventTime,
+        item.SignalDate,
+        StockSymbolNormalizer.NormalizeCode(item.Symbol),
+        NormalizeStockName(item.Symbol, item.Name),
+        item.StrategyCode,
+        item.StrategyName,
+        item.StrategyGroup,
+        item.StrategyVersionId,
+        item.StrategyVersion,
+        item.Score,
+        RoundNullable(item.SignalPrice),
+        Math.Round(item.EntryPrice, 4),
+        item.HorizonCode,
+        item.HorizonName,
+        item.TradingDays,
+        item.HorizonGroup,
+        item.TargetDate,
+        RoundNullable(item.TargetClose),
+        RoundNullable(item.ReturnPercent),
+        RoundNullable(item.MaxReturnPercent),
+        RoundNullable(item.MinReturnPercent),
+        item.Status,
+        item.CalculatedAt,
+        item.UpdatedAt);
+}
+
+static SignalReturnStrategySummaryDto MapSignalReturnStrategySummary(SignalReturnStrategySummary item)
+{
+    return new SignalReturnStrategySummaryDto(
+        item.StrategyCode,
+        item.StrategyName,
+        item.StrategyGroup,
+        item.StrategyVersion,
+        item.HorizonCode,
+        item.HorizonName,
+        item.HorizonGroup,
+        item.SignalCount,
+        item.CompletedCount,
+        item.PendingCount,
+        item.WinCount,
+        RoundNullable(item.WinRatePercent),
+        RoundNullable(item.AverageReturnPercent),
+        RoundNullable(item.AverageMaxReturnPercent),
+        RoundNullable(item.AverageMinReturnPercent),
+        RoundNullable(item.BestReturnPercent),
+        RoundNullable(item.WorstReturnPercent),
+        item.LastSignalTime);
+}
+
+static StrategyVersionDto MapStrategyVersion(StrategyVersion item)
+{
+    return new StrategyVersionDto(
+        item.Id,
+        item.StrategyCode,
+        item.StrategyName,
+        item.Version,
+        item.Status,
+        item.RuleSummary,
+        item.ParameterJson,
+        item.DataRequirementJson,
+        item.DefinitionHash,
+        item.CreatedAt,
+        item.ActivatedAt,
+        item.DeactivatedAt,
+        item.Source);
+}
+
+static StrategyHitVersionDto MapStrategyHitVersion(StrategyHitVersion item)
+{
+    return new StrategyHitVersionDto(
+        item.EventId,
+        item.StrategyCode,
+        item.StrategyVersionId,
+        item.Version,
+        item.ParameterJson,
+        item.RuleSummary,
+        item.CreatedAt);
+}
+
 static IndicatorPointDto MapIndicatorPoint(IndicatorPoint item)
 {
     return new IndicatorPointDto(
@@ -1388,6 +1763,49 @@ static IndicatorPointDto MapIndicatorPoint(IndicatorPoint item)
         item.Value2,
         item.Value3,
         item.BarValue);
+}
+
+static HeatSnapshotOverviewDto MapHeatSnapshotOverview(HeatSnapshotOverview item)
+{
+    return new HeatSnapshotOverviewDto(
+        item.Id,
+        item.SnapshotTime,
+        item.TradeDate,
+        item.SectorMappingBatchId,
+        item.ConceptMappingBatchId,
+        item.SectorCount,
+        item.ConceptCount,
+        item.Sectors.Select(MapHeatSnapshotItem).ToArray(),
+        item.Concepts.Select(MapHeatSnapshotItem).ToArray());
+}
+
+static HeatSnapshotItemDto MapHeatSnapshotItem(HeatSnapshotItem item)
+{
+    return new HeatSnapshotItemDto(
+        item.Code,
+        item.Name,
+        item.HeatRank,
+        item.StockCount,
+        item.RisingCount,
+        item.AverageChangePercent,
+        item.RisingRatioPercent,
+        item.TotalAmount,
+        item.HeatScore,
+        item.Leaders.Select(MapHeatLeader).ToArray(),
+        item.LeaderSymbols);
+}
+
+static MappingSnapshotBatchDto MapMappingSnapshotBatch(MappingSnapshotBatch item)
+{
+    return new MappingSnapshotBatchDto(
+        item.Id,
+        item.MappingType,
+        item.SnapshotTime,
+        item.TradeDate,
+        item.Source,
+        item.ItemCount,
+        item.FileHash,
+        item.CreatedAt);
 }
 
 static HeatLeaderDto MapHeatLeader(HeatLeader item)
@@ -1399,6 +1817,102 @@ static HeatLeaderDto MapHeatLeader(HeatLeader item)
         item.ChangePercent,
         item.Amount,
         item.VolumeRatio);
+}
+
+static MappingBoardItemDto[] ReadMappingBoardsFromCsv(string mappingPath, int count)
+{
+    if (!File.Exists(mappingPath))
+    {
+        return [];
+    }
+
+    var boards = new Dictionary<string, (string Code, string Name, int Rank, HashSet<string> Symbols)>(StringComparer.OrdinalIgnoreCase);
+    var rank = 0;
+    foreach (var columns in ReadSimpleCsvRows(mappingPath))
+    {
+        if (columns.Count < 3)
+        {
+            continue;
+        }
+
+        var symbol = StockSymbolNormalizer.NormalizeCode(columns[0]);
+        var code = columns[1].Trim();
+        var name = columns[2].Trim();
+        if (string.IsNullOrWhiteSpace(symbol)
+            || string.IsNullOrWhiteSpace(code)
+            || string.IsNullOrWhiteSpace(name))
+        {
+            continue;
+        }
+
+        if (!boards.TryGetValue(code, out var board))
+        {
+            rank++;
+            board = (code, name, rank, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            boards[code] = board;
+        }
+
+        board.Symbols.Add(symbol);
+        boards[code] = board;
+    }
+
+    return boards.Values
+        .OrderBy(item => item.Rank)
+        .Take(count)
+        .Select(item => new MappingBoardItemDto(
+            item.Code,
+            item.Name,
+            item.Symbols.Count,
+            item.Rank))
+        .ToArray();
+}
+
+static IEnumerable<IReadOnlyList<string>> ReadSimpleCsvRows(string mappingPath)
+{
+    foreach (var line in File.ReadLines(mappingPath).Skip(1))
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#'))
+        {
+            continue;
+        }
+
+        yield return ParseSimpleCsvLine(line);
+    }
+}
+
+static IReadOnlyList<string> ParseSimpleCsvLine(string line)
+{
+    var values = new List<string>();
+    var current = new System.Text.StringBuilder();
+    var inQuotes = false;
+    for (var i = 0; i < line.Length; i++)
+    {
+        var ch = line[i];
+        if (ch == '"')
+        {
+            if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+            {
+                current.Append('"');
+                i++;
+            }
+            else
+            {
+                inQuotes = !inQuotes;
+            }
+        }
+        else if (ch == ',' && !inQuotes)
+        {
+            values.Add(current.ToString().Trim());
+            current.Clear();
+        }
+        else
+        {
+            current.Append(ch);
+        }
+    }
+
+    values.Add(current.ToString().Trim());
+    return values;
 }
 
 static BacktestSignalDto MapBacktestSignal(BacktestSignalItem item)
@@ -1468,14 +1982,17 @@ static async Task<IReadOnlyDictionary<string, string>> LoadStockNamesAsync(
     CancellationToken cancellationToken)
 {
     var names = LoadHistoricalStockNames(configuration);
-    if (names.Count > 0)
+    try
     {
-        return names;
+        // Realtime instrument names are the authoritative source when the historical cache is stale or malformed.
+        foreach (var item in await LoadRealtimeStockNamesAsync(marketDataProvider, cancellationToken))
+        {
+            names[item.Key] = item.Value;
+        }
     }
-
-    foreach (var item in await LoadRealtimeStockNamesAsync(marketDataProvider, cancellationToken))
+    catch
     {
-        names[item.Key] = item.Value;
+        // Keep the historical fallback when the realtime provider is unavailable.
     }
 
     return names;
@@ -1556,10 +2073,8 @@ static IReadOnlyDictionary<string, string> MergeStockNames(
             continue;
         }
 
-        if (!names.TryGetValue(symbol, out var existing) || IsMissingStockName(symbol, existing))
-        {
-            names[symbol] = quote.Name.Trim();
-        }
+        // A valid realtime name must override historical cache values because the cache may contain shifted fields.
+        names[symbol] = quote.Name.Trim();
     }
 
     return names;
@@ -1586,7 +2101,8 @@ static bool IsLikelyGarbledStockName(string value)
 {
     return value.Contains('\uFFFD')
         || value.Contains('\u951F')
-        || value.Count(ch => ch == '?') >= 2;
+        || value.Count(ch => ch == '?') >= 2
+        || value.All(ch => char.IsDigit(ch) || ch is '.' or '-' or '_');
 }
 
 static string NormalizeStockName(
@@ -1618,6 +2134,25 @@ static string NormalizeStockName(
         _ => IsMissingStockName(symbol, currentName) ? symbol : currentName!.Trim()
     };
 }
+
+static void ReportDuplicateServiceHost(string mutexName)
+{
+    var message = $"{DateTimeOffset.Now:O} Duplicate ServiceHost instance blocked. Mutex={mutexName} ProcessId={Environment.ProcessId} BaseDirectory={AppContext.BaseDirectory}";
+    Console.Error.WriteLine(message);
+    try
+    {
+        var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+        Directory.CreateDirectory(logDirectory);
+        File.AppendAllText(
+            Path.Combine(logDirectory, "service-single-instance.log"),
+            message + Environment.NewLine);
+    }
+    catch
+    {
+        // 单例保护不能因为诊断日志写入失败而阻止退出。
+    }
+}
+
 static StrategyDefinitionDto MapStrategyDefinition(AShareRadar.Domain.Strategies.StrategyDefinition item)
 {
     return new StrategyDefinitionDto(
@@ -1636,7 +2171,3 @@ static StrategyDefinitionDto MapStrategyDefinition(AShareRadar.Domain.Strategies
         item.Parameters,
         item.Description);
 }
-
-
-
-

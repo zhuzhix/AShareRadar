@@ -38,7 +38,8 @@ public sealed class LongSupportReboundStrategy : ISignalStrategy
             RequiresMinuteKLine: false,
             RequiresSectorData: false,
             RequiresCapitalFlow: false,
-            MinDailyBarCount: PreferredDailyBarCount),
+            MinDailyBarCount: PreferredDailyBarCount,
+            RequiresThirtyMinuteKLine: true),
         new Dictionary<string, string>
         {
             ["daily_wave_lookback"] = DailyWaveLookback.ToString(),
@@ -267,29 +268,17 @@ public sealed class LongSupportReboundStrategy : ISignalStrategy
 
     private static IntradayTriggerContext? AnalyzeIntradayTrigger(StrategyContext context, string symbol, decimal currentPrice)
     {
-        KLineBar[] bars30;
-        if (context.ThirtyMinuteBarsBySymbol is not null
-            && context.ThirtyMinuteBarsBySymbol.TryGetValue(symbol, out var directThirtyMinuteBars)
-            && directThirtyMinuteBars.Count >= 36)
-        {
-            bars30 = directThirtyMinuteBars
-                .OrderBy(item => item.TradingTime)
-                .TakeLast(IntradayLookback)
-                .ToArray();
-        }
-        else if (context.MinuteBarsBySymbol is not null
-            && context.MinuteBarsBySymbol.TryGetValue(symbol, out var minuteBars)
-            && minuteBars.Count >= RequiredMinuteBarCount)
-        {
-            bars30 = AggregateToThirtyMinuteBars(minuteBars)
-                .TakeLast(IntradayLookback)
-                .ToArray();
-        }
-        else
+        if (context.ThirtyMinuteBarsBySymbol is null
+            || !context.ThirtyMinuteBarsBySymbol.TryGetValue(symbol, out var directThirtyMinuteBars)
+            || directThirtyMinuteBars.Count < 36)
         {
             return null;
         }
-        
+
+        var bars30 = directThirtyMinuteBars
+            .OrderBy(item => item.TradingTime)
+            .TakeLast(IntradayLookback)
+            .ToArray();
         if (bars30.Length < 36)
         {
             return null;

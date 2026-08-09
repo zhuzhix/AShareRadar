@@ -83,6 +83,85 @@ public sealed class SqliteDatabase
                 PRIMARY KEY (event_id, row_index)
             );
 
+            CREATE TABLE IF NOT EXISTS strategy_versions (
+                id TEXT PRIMARY KEY,
+                strategy_code TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                rule_summary TEXT NOT NULL,
+                parameter_json TEXT NOT NULL,
+                data_requirement_json TEXT NOT NULL,
+                definition_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                activated_at TEXT NULL,
+                deactivated_at TEXT NULL,
+                source TEXT NOT NULL,
+                UNIQUE(strategy_code, version)
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_hit_versions (
+                event_id TEXT NOT NULL,
+                strategy_code TEXT NOT NULL,
+                strategy_version_id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                parameter_json TEXT NOT NULL,
+                rule_summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (event_id, strategy_code)
+            );
+
+            CREATE TABLE IF NOT EXISTS signal_heat_contexts (
+                event_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                context_type TEXT NOT NULL,
+                code TEXT NOT NULL,
+                name TEXT NOT NULL,
+                heat_rank INTEGER NOT NULL,
+                stock_count INTEGER NOT NULL,
+                rising_count INTEGER NOT NULL,
+                average_change_percent TEXT NOT NULL,
+                rising_ratio_percent TEXT NOT NULL,
+                total_amount TEXT NOT NULL,
+                heat_score TEXT NOT NULL,
+                is_leader INTEGER NOT NULL,
+                heat_snapshot_batch_id TEXT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (event_id, row_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS signal_return_records (
+                event_id TEXT NOT NULL,
+                opportunity_id TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                signal_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                name TEXT NOT NULL,
+                strategy_code TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                strategy_group TEXT NOT NULL,
+                strategy_version_id TEXT NULL,
+                strategy_version TEXT NULL,
+                score TEXT NOT NULL,
+                signal_price TEXT NULL,
+                entry_price TEXT NOT NULL,
+                horizon_code TEXT NOT NULL,
+                horizon_name TEXT NOT NULL,
+                trading_days INTEGER NOT NULL,
+                horizon_group TEXT NOT NULL,
+                target_date TEXT NULL,
+                target_close TEXT NULL,
+                return_percent TEXT NULL,
+                max_return_percent TEXT NULL,
+                min_return_percent TEXT NULL,
+                status TEXT NOT NULL,
+                calculated_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (event_id, strategy_code, horizon_code)
+            );
+
             CREATE TABLE IF NOT EXISTS prediction_records (
                 id TEXT PRIMARY KEY,
                 signal_date TEXT NOT NULL,
@@ -123,6 +202,81 @@ public sealed class SqliteDatabase
                 metrics_json TEXT NOT NULL,
                 warnings_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS mapping_snapshot_batches (
+                id TEXT PRIMARY KEY,
+                mapping_type TEXT NOT NULL,
+                snapshot_time TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                source TEXT NOT NULL,
+                item_count INTEGER NOT NULL,
+                file_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS mapping_snapshot_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                mapping_type TEXT NOT NULL,
+                board_code TEXT NOT NULL,
+                board_name TEXT NOT NULL,
+                board_rank INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                stock_name TEXT NULL,
+                source TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS heat_snapshot_batches (
+                id TEXT PRIMARY KEY,
+                snapshot_time TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                sector_mapping_batch_id TEXT NULL,
+                concept_mapping_batch_id TEXT NULL,
+                source TEXT NOT NULL,
+                sector_count INTEGER NOT NULL,
+                concept_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sector_heat_snapshots (
+                batch_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                snapshot_time TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                mapping_batch_id TEXT NULL,
+                sector_code TEXT NOT NULL,
+                sector_name TEXT NOT NULL,
+                heat_rank INTEGER NOT NULL,
+                stock_count INTEGER NOT NULL,
+                rising_count INTEGER NOT NULL,
+                average_change_percent TEXT NOT NULL,
+                rising_ratio_percent TEXT NOT NULL,
+                total_amount TEXT NOT NULL,
+                heat_score TEXT NOT NULL,
+                leaders_json TEXT NOT NULL,
+                leader_symbols_json TEXT NOT NULL,
+                PRIMARY KEY (batch_id, row_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS concept_heat_snapshots (
+                batch_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                snapshot_time TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                mapping_batch_id TEXT NULL,
+                concept_code TEXT NOT NULL,
+                concept_name TEXT NOT NULL,
+                heat_rank INTEGER NOT NULL,
+                stock_count INTEGER NOT NULL,
+                rising_count INTEGER NOT NULL,
+                average_change_percent TEXT NOT NULL,
+                rising_ratio_percent TEXT NOT NULL,
+                total_amount TEXT NOT NULL,
+                heat_score TEXT NOT NULL,
+                leaders_json TEXT NOT NULL,
+                leader_symbols_json TEXT NOT NULL,
+                PRIMARY KEY (batch_id, row_index)
             );
 
             CREATE TABLE IF NOT EXISTS long_term_tracking_items (
@@ -177,8 +331,29 @@ public sealed class SqliteDatabase
             CREATE INDEX IF NOT EXISTS ix_opportunities_symbol ON opportunities(symbol);
             CREATE INDEX IF NOT EXISTS ix_signal_events_opportunity_id ON signal_events(opportunity_id);
             CREATE INDEX IF NOT EXISTS ix_signal_events_event_time ON signal_events(event_time);
+            CREATE INDEX IF NOT EXISTS ix_strategy_versions_code_status ON strategy_versions(strategy_code, status);
+            CREATE INDEX IF NOT EXISTS ix_strategy_versions_code_version ON strategy_versions(strategy_code, version);
+            CREATE INDEX IF NOT EXISTS ix_strategy_hit_versions_event ON strategy_hit_versions(event_id);
+            CREATE INDEX IF NOT EXISTS ix_strategy_hit_versions_strategy ON strategy_hit_versions(strategy_code, version);
+            CREATE INDEX IF NOT EXISTS ix_signal_heat_contexts_event_id ON signal_heat_contexts(event_id);
+            CREATE INDEX IF NOT EXISTS ix_signal_heat_contexts_symbol_time ON signal_heat_contexts(symbol, event_time);
+            CREATE INDEX IF NOT EXISTS ix_signal_heat_contexts_type_name ON signal_heat_contexts(context_type, name, event_time);
+            CREATE INDEX IF NOT EXISTS ix_signal_return_records_signal_date ON signal_return_records(signal_date);
+            CREATE INDEX IF NOT EXISTS ix_signal_return_records_strategy ON signal_return_records(strategy_code, horizon_code, signal_date);
+            CREATE INDEX IF NOT EXISTS ix_signal_return_records_group ON signal_return_records(strategy_group, horizon_group, signal_date);
+            CREATE INDEX IF NOT EXISTS ix_signal_return_records_symbol ON signal_return_records(symbol, signal_date);
+            CREATE INDEX IF NOT EXISTS ix_signal_return_records_version ON signal_return_records(strategy_code, strategy_version, horizon_code, signal_date);
             CREATE INDEX IF NOT EXISTS ix_prediction_records_date ON prediction_records(signal_date);
             CREATE INDEX IF NOT EXISTS ix_market_sentiment_snapshot_time ON market_sentiment_snapshots(snapshot_time);
+            CREATE INDEX IF NOT EXISTS ix_mapping_snapshot_type_time ON mapping_snapshot_batches(mapping_type, snapshot_time);
+            CREATE INDEX IF NOT EXISTS ix_mapping_snapshot_items_batch ON mapping_snapshot_items(batch_id);
+            CREATE INDEX IF NOT EXISTS ix_mapping_snapshot_items_symbol ON mapping_snapshot_items(mapping_type, symbol);
+            CREATE INDEX IF NOT EXISTS ix_heat_snapshot_batches_time ON heat_snapshot_batches(snapshot_time);
+            CREATE INDEX IF NOT EXISTS ix_heat_snapshot_batches_trade_date ON heat_snapshot_batches(trade_date, snapshot_time);
+            CREATE INDEX IF NOT EXISTS ix_sector_heat_snapshot_time ON sector_heat_snapshots(snapshot_time, heat_rank);
+            CREATE INDEX IF NOT EXISTS ix_sector_heat_snapshot_name ON sector_heat_snapshots(sector_name, snapshot_time);
+            CREATE INDEX IF NOT EXISTS ix_concept_heat_snapshot_time ON concept_heat_snapshots(snapshot_time, heat_rank);
+            CREATE INDEX IF NOT EXISTS ix_concept_heat_snapshot_name ON concept_heat_snapshots(concept_name, snapshot_time);
             CREATE INDEX IF NOT EXISTS ix_long_term_tracking_last_hit_at ON long_term_tracking_items(last_hit_at);
             CREATE INDEX IF NOT EXISTS ix_long_term_tracking_strategy ON long_term_tracking_items(strategy_code, status);
             CREATE INDEX IF NOT EXISTS ix_long_term_tracking_symbol ON long_term_tracking_items(symbol);
@@ -193,6 +368,8 @@ public sealed class SqliteDatabase
         EnsureColumn(connection, "strategy_hits", "failed_conditions_json", "TEXT NULL");
         EnsureColumn(connection, "strategy_hits", "stop_loss_price", "TEXT NULL");
         EnsureColumn(connection, "strategy_hits", "take_profit_price", "TEXT NULL");
+        EnsureColumn(connection, "signal_return_records", "strategy_version_id", "TEXT NULL");
+        EnsureColumn(connection, "signal_return_records", "strategy_version", "TEXT NULL");
         DropDeprecatedStockPoolTables(connection);
         DropDeprecatedStrategyTrainingTables(connection);
         DropDeprecatedLowSparkTables(connection);

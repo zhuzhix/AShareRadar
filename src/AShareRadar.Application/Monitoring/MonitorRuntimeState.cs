@@ -68,6 +68,27 @@ public sealed class MonitorRuntimeState
         }
     }
 
+    public void ApplyPoolScanResult(
+        DateTimeOffset scanTime,
+        int realtimeSignalCount,
+        int? observationSignalCount,
+        int platformAlertCount,
+        int platformConfirmedCount)
+    {
+        lock (_gate)
+        {
+            _status = _status with
+            {
+                RealtimePoolStatus = "Running",
+                ObservationPoolStatus = observationSignalCount.HasValue ? "Running" : _status.ObservationPoolStatus,
+                RealtimePoolSignalCount = realtimeSignalCount,
+                ObservationPoolSignalCount = observationSignalCount ?? _status.ObservationPoolSignalCount,
+                PlatformBreakoutAlertCount = platformAlertCount,
+                PlatformBreakoutConfirmedCount = platformConfirmedCount
+            };
+        }
+    }
+
     public void ApplyScanResult(
         DateTimeOffset scanTime,
         int activeOpportunityCount,

@@ -43,7 +43,9 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
             RequiresMinuteKLine: false,
             RequiresSectorData: false,
             RequiresCapitalFlow: false,
-            MinDailyBarCount: AverageDailyVolumeLookback + 1),
+            MinDailyBarCount: AverageDailyVolumeLookback + 1,
+            RequiresWeeklyKLine: true,
+            RequiresThirtyMinuteKLine: true),
         new Dictionary<string, string>
         {
             ["weekly_platform_lookback"] = WeeklyPlatformLookback.ToString(),
@@ -91,14 +93,11 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         var orderedWeeks = weeklyBars
             .OrderBy(item => item.TradingTime)
             .ToArray();
+        var currentWeekStart = GetWeekStart(context.TradingDate);
         var historyWeeks = orderedWeeks
-            .Where(item => DateOnly.FromDateTime(item.TradingTime) < context.TradingDate)
+            .Where(item => DateOnly.FromDateTime(item.TradingTime) < currentWeekStart)
             .TakeLast(WeeklyPlatformLookback)
             .ToArray();
-        if (historyWeeks.Length < WeeklyPlatformLookback)
-        {
-            historyWeeks = orderedWeeks.TakeLast(WeeklyPlatformLookback).ToArray();
-        }
 
         if (historyWeeks.Length < WeeklyPlatformLookback)
         {
@@ -125,15 +124,17 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         var thirtyMinuteVolumeRatio = 0m;
         var thirtyMinuteClosePosition = 0m;
         var thirtyMinuteUpperShadow = 0m;
+        var thirtyMinuteBreakoutPrice = 0m;
         if (context.ThirtyMinuteBarsBySymbol is not null
             && TryGetBars(context.ThirtyMinuteBarsBySymbol, quote.Symbol, out var thirtyBars))
         {
             var completedBars = thirtyBars.OrderBy(item => item.TradingTime)
-                .Where(item => item.TradingTime <= DateTime.Now.AddMinutes(-30))
+                .Where(item => item.TradingTime <= context.Snapshot.SnapshotTime.LocalDateTime.AddMinutes(-30))
                 .ToArray();
             if (completedBars.Length >= 6)
             {
                 var confirmationBar = completedBars[^1];
+                thirtyMinuteBreakoutPrice = confirmationBar.Close;
                 var averageVolume = completedBars[^6..^1].Average(item => item.Volume);
                 thirtyMinuteVolumeRatio = averageVolume > 0 ? confirmationBar.Volume / averageVolume : 0m;
                 thirtyMinuteClosePosition = confirmationBar.High > confirmationBar.Low
@@ -255,6 +256,7 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
                 ["upper_shadow_percent"] = upperShadowPercent,
                 ["average_daily_volume_20"] = averageDailyVolume
                 , ["thirty_minute_confirmed"] = thirtyMinuteConfirmed ? 1m : 0m
+                , ["thirty_minute_breakout_price"] = thirtyMinuteBreakoutPrice
                 , ["thirty_minute_volume_ratio"] = thirtyMinuteVolumeRatio
                 , ["thirty_minute_close_position_percent"] = thirtyMinuteClosePosition
                 , ["thirty_minute_upper_shadow_percent"] = thirtyMinuteUpperShadow
@@ -286,6 +288,12 @@ public sealed class PlatformVolumeBreakoutStrategy : ISignalStrategy
         }
 
         return barsBySymbol.TryGetValue(StockSymbolNormalizer.NormalizeCode(symbol), out bars!);
+    }
+
+    private static DateOnly GetWeekStart(DateOnly date)
+    {
+        var daysSinceMonday = ((int)date.DayOfWeek + 6) % 7;
+        return date.AddDays(-daysSinceMonday);
     }
 
     private static List<string> BuildStructuralFailedConditions(

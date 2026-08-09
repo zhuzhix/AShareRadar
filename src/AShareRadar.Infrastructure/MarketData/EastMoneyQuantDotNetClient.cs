@@ -203,6 +203,71 @@ public sealed class EastMoneyQuantDotNetClient
             .ToArray();
     }
 
+    public async Task<IReadOnlyDictionary<string, string>> LoadAshareInstrumentNamesAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled)
+        {
+            throw new InvalidOperationException("EastMoney Quant is disabled; canonical stock names cannot be generated.");
+        }
+
+        await _sdkLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await Task.Run(() => LoadAshareInstrumentNamesCore(cancellationToken), cancellationToken);
+        }
+        finally
+        {
+            _sdkLock.Release();
+        }
+    }
+
+    private IReadOnlyDictionary<string, string> LoadAshareInstrumentNamesCore(CancellationToken cancellationToken)
+    {
+        EnsureToken();
+        var table = GMApi.GetInstrumentinfos(string.Empty, "SHSE,SZSE", "1", string.Empty, "symbol,sec_name,delisted_date");
+        if (table.status != 0 || table.data is null)
+        {
+            throw new InvalidDataException($"EastMoney instrument name query failed. status={table.status}; {table.statusInfo}");
+        }
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (DataRow row in table.data.Rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var symbol = Convert.ToString(row["symbol"], CultureInfo.InvariantCulture) ?? string.Empty;
+            var name = Convert.ToString(row["sec_name"], CultureInfo.InvariantCulture)?.Trim() ?? string.Empty;
+            var delisted = Convert.ToString(row["delisted_date"], CultureInfo.InvariantCulture) ?? string.Empty;
+            if (!IsSupportedAshareSymbol(symbol))
+            {
+                continue;
+            }
+
+            var code = StockSymbolNormalizer.NormalizeCode(symbol);
+            if (code.Length != 6 || !IsCanonicalStockName(name))
+            {
+                throw new InvalidDataException($"Invalid canonical stock name from EastMoney instrumentinfos: {symbol}={name}");
+            }
+
+            result[code] = name;
+        }
+
+        if (result.Count < 1000)
+        {
+            throw new InvalidDataException($"EastMoney instrument name coverage is too low: {result.Count}");
+        }
+
+        return result;
+    }
+
+    private static bool IsCanonicalStockName(string name)
+    {
+        return !string.IsNullOrWhiteSpace(name)
+            && !name.Contains('\uFFFD')
+            && !name.Contains('?')
+            && name.Any(ch => ch >= '\u4E00' && ch <= '\u9FFF')
+            && !name.All(ch => char.IsDigit(ch) || ch == '.');
+    }
+
     private int LoadAshareUniverseCountCore(CancellationToken cancellationToken)
     {
         return LoadAshareUniverseSymbolsCore(cancellationToken).Count;

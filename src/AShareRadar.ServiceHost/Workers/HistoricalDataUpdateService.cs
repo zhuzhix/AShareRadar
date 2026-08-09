@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using AShareRadar.Contracts.History;
+using AShareRadar.ServiceHost.Services;
 using DuckDB.NET.Data;
 
 namespace AShareRadar.ServiceHost.Workers;
@@ -8,16 +9,19 @@ public sealed class HistoricalDataUpdateService
 {
     private readonly HistoricalDataUpdateOptions _options;
     private readonly ILogger<HistoricalDataUpdateService> _logger;
+    private readonly StockNameMapSyncService _stockNameMapSyncService;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _sync = new();
     private HistoricalDataUpdateState _state = new();
 
     public HistoricalDataUpdateService(
         HistoricalDataUpdateOptions options,
-        ILogger<HistoricalDataUpdateService> logger)
+        ILogger<HistoricalDataUpdateService> logger,
+        StockNameMapSyncService stockNameMapSyncService)
     {
         _options = options;
         _logger = logger;
+        _stockNameMapSyncService = stockNameMapSyncService;
     }
 
     public HistoricalDataUpdateStatusDto GetStatus()
@@ -104,6 +108,7 @@ public sealed class HistoricalDataUpdateService
         try
         {
             ValidatePaths(pythonPath, scriptPath, dataDir);
+            await _stockNameMapSyncService.SyncAsync(dataDir, cancellationToken);
             var arguments = BuildArguments(scriptPath, dataDir, targetDate);
             _logger.LogInformation(
                 "Historical data update started. Trigger={Trigger} Script={ScriptPath} DataDir={DataDir}",
@@ -325,6 +330,8 @@ public sealed class HistoricalDataUpdateService
             Quote(scriptPath),
             "--data-dir",
             Quote(dataDir),
+            "--name-map",
+            Quote(Path.Combine(dataDir, "stock-name-map.json")),
             "--adjustflag",
             Quote(string.IsNullOrWhiteSpace(_options.AdjustFlag) ? "2" : _options.AdjustFlag)
         };

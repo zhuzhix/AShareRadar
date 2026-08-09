@@ -30,9 +30,42 @@ public partial class MainWindow : Window
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
     private static readonly NLog.Logger MappingLogger = NLog.LogManager.GetLogger("AShareRadar.Mapping.Desktop");
+    private static readonly HashSet<string> EastMoneyFirstLevelIndustryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "传媒",
+        "电力设备",
+        "电子",
+        "房地产",
+        "纺织服饰",
+        "非银金融",
+        "公用事业",
+        "国防军工",
+        "钢铁",
+        "环保",
+        "交通运输",
+        "基础化工",
+        "家用电器",
+        "建筑材料",
+        "建筑装饰",
+        "机械设备",
+        "计算机",
+        "煤炭",
+        "美容护理",
+        "农林牧渔",
+        "汽车",
+        "轻工制造",
+        "商贸零售",
+        "石油石化",
+        "社会服务",
+        "食品饮料",
+        "通信",
+        "医药生物",
+        "有色金属",
+        "银行",
+        "综合"
+    };
     private WebView2? _mappingWebView;
     private string? _activeMappingTraceId;
-    private string? _activeMappingRunId;
     private readonly RadarApiClient _apiClient = new("http://127.0.0.1:18730");
     private readonly MinimalSignalRClient _realtimeClient = new("http://127.0.0.1:18730/hubs/monitor");
     private readonly DispatcherTimer _refreshTimer;
@@ -48,6 +81,7 @@ public partial class MainWindow : Window
     private bool _showMarketSentiment;
     private bool _showHistory;
     private bool _showPredictionReview;
+    private bool _showStrategyReview;
     private bool _showStrategyCenter;
     private bool _showLongTermTracking;
     private bool _showBacktest;
@@ -67,13 +101,16 @@ public partial class MainWindow : Window
     private Guid? _lastAutoRefreshedPredictionJobId;
     private IReadOnlyList<HeatBoardItemDto> _mappingSectorHeatItems = [];
     private IReadOnlyList<HeatBoardItemDto> _mappingConceptHeatItems = [];
+    private IReadOnlyList<MappingBoardItemDto> _mappingSectorBoardItems = [];
+    private IReadOnlyList<MappingBoardItemDto> _mappingConceptBoardItems = [];
 
     public MainWindow()
     {
         InitializeComponent();
-        InitializeMappingBrowser();
         HistoryDatePicker.SelectedDate = null;
         PredictionDatePicker.SelectedDate = DateTime.Today;
+        StrategyReviewFromDatePicker.SelectedDate = DateTime.Today.AddDays(-30);
+        StrategyReviewToDatePicker.SelectedDate = DateTime.Today;
         BacktestStartDatePicker.SelectedDate = DateTime.Today.AddDays(-60);
         BacktestEndDatePicker.SelectedDate = DateTime.Today;
         StockPoolHitDatePicker.SelectedDate = DateTime.Today;
@@ -117,37 +154,6 @@ public partial class MainWindow : Window
     {
         ThemeToggleButton.Content = ThemeService.CurrentTheme == AppTheme.Dark ? "暗色" : "亮色";
         ThemeToggleButton.ToolTip = ThemeService.CurrentTheme == AppTheme.Dark ? "切换到亮色皮肤" : "切换到暗色皮肤";
-    }
-
-    private async void InitializeMappingBrowser()
-    {
-        var stopwatch = Stopwatch.StartNew();
-        MappingLogger.Info("WebView2 initialization started. BaseDirectory={BaseDirectory}", AppContext.BaseDirectory);
-        try
-        {
-            _mappingWebView = MappingWebView;
-            await _mappingWebView.EnsureCoreWebView2Async();
-            _mappingWebView.CoreWebView2.WebResourceResponseReceived += MappingWebResourceResponseReceived;
-            _mappingWebView.CoreWebView2.NavigationStarting += (_, args) =>
-                MappingLogger.Info("WebView2 navigation started. NavigationId={NavigationId} Uri={Uri} TraceId={TraceId}", args.NavigationId, args.Uri, _activeMappingTraceId);
-            _mappingWebView.CoreWebView2.NavigationCompleted += (_, args) =>
-                MappingLogger.Info(
-                    "WebView2 navigation completed. NavigationId={NavigationId} Success={Success} WebErrorStatus={WebErrorStatus} TraceId={TraceId}",
-                    args.NavigationId,
-                    args.IsSuccess,
-                    args.WebErrorStatus,
-                    _activeMappingTraceId);
-            MappingLogger.Info(
-                "WebView2 initialization completed. RuntimeVersion={RuntimeVersion} UserDataFolder={UserDataFolder} ElapsedMs={ElapsedMs}",
-                _mappingWebView.CoreWebView2.Environment.BrowserVersionString,
-                _mappingWebView.CoreWebView2.Environment.UserDataFolder,
-                stopwatch.ElapsedMilliseconds);
-            _mappingWebView.CoreWebView2.Navigate("https://quote.eastmoney.com/center/gridlist.html#concept_board");
-        }
-        catch (Exception ex)
-        {
-            MappingLogger.Error(ex, "WebView2 initialization failed. ElapsedMs={ElapsedMs}", stopwatch.ElapsedMilliseconds);
-        }
     }
 
     private void MappingWebResourceResponseReceived(object? sender, CoreWebView2WebResourceResponseReceivedEventArgs e)
@@ -196,15 +202,22 @@ public partial class MainWindow : Window
             await RunUiActionAsync(async token =>
             {
                 var stopwatch = Stopwatch.StartNew();
+                MappingWebViewWindow? mappingWindow = null;
                 try
                 {
+                    mappingWindow = new MappingWebViewWindow
+                    {
+                        Owner = this
+                    };
+                    mappingWindow.Show();
                     MappingUpdateStatusText.Text = "概念行业：正在通过 WebView2 获取...";
                     MappingPageStateText.Text = "采集中";
                     MappingPageStateText.Visibility = Visibility.Visible;
                     MappingPageErrorText.Visibility = Visibility.Collapsed;
-                    var payload = await UpdateMappingsFromWebViewAsync(traceId, token);
+                    var payload = await UpdateMappingsFromWebViewAsync(traceId, mappingWindow, token);
                     MappingUpdateStatusText.Text = "概念行业：正在同步服务端...";
                     MappingPageStateText.Text = "同步中";
+                    mappingWindow.SetStatus("采集完成，正在同步服务端...");
                     var sectorRows = payload.Sectors
                         .SelectMany(board => board.Members.Select(member => new MarketMappingRowDto(member.Symbol, board.Code, board.Name)))
                         .ToArray();
@@ -241,6 +254,7 @@ public partial class MainWindow : Window
                     MappingUpdateStatusText.Text = $"概念行业：更新完成，行业 {result.SectorRows} / 概念 {result.ConceptRows}";
                     MappingPageStateText.Text = "更新完成";
                     MappingPageSummaryText.Text = $"行业映射 {result.SectorRows:N0} | 概念映射 {result.ConceptRows:N0} | 更新时间 {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+                    mappingWindow.SetStatus("概念行业更新完成，正在关闭窗口...");
                 }
                 catch (Exception ex)
                 {
@@ -248,8 +262,16 @@ public partial class MainWindow : Window
                     MappingPageStateText.Text = "更新失败";
                     MappingPageErrorText.Text = ex is OperationCanceledException ? "采集或同步超时，任务已终止。" : ex.Message;
                     MappingPageErrorText.Visibility = Visibility.Visible;
+                    mappingWindow?.SetStatus("概念行业更新失败，正在关闭窗口...");
                     MappingLogger.Error(ex, "Mapping update UI flow failed. TraceId={TraceId} ElapsedMs={ElapsedMs}", traceId, stopwatch.ElapsedMilliseconds);
                     throw;
+                }
+                finally
+                {
+                    if (mappingWindow?.IsVisible == true)
+                    {
+                        mappingWindow.Close();
+                    }
                 }
             }, TimeSpan.FromMinutes(10));
         }
@@ -259,219 +281,83 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task<MappingPayload> UpdateMappingsFromWebViewAsync(string traceId, CancellationToken cancellationToken)
+    private async Task<MappingPayload> UpdateMappingsFromWebViewAsync(
+        string traceId,
+        MappingWebViewWindow mappingWindow,
+        CancellationToken cancellationToken)
     {
-        if (_mappingWebView?.CoreWebView2 is null)
-        {
-            MappingLogger.Error("Mapping collection cannot start because WebView2 is not initialized. TraceId={TraceId}", traceId);
-            throw new InvalidOperationException("WebView2 尚未初始化。");
-        }
-
         const string targetUri = "https://quote.eastmoney.com/center/gridlist.html#concept_board";
         var stopwatch = Stopwatch.StartNew();
-        _activeMappingTraceId = traceId;
-        MappingLogger.Info("WebView2 mapping collection started. TraceId={TraceId} Uri={Uri}", traceId, targetUri);
+        EventHandler<CoreWebView2NavigationStartingEventArgs>? navigationStartingHandler = null;
+        EventHandler<CoreWebView2NavigationCompletedEventArgs>? navigationCompletedHandler = null;
 
-        var currentUri = _mappingWebView.Source?.AbsoluteUri ?? _mappingWebView.CoreWebView2.Source;
-        if (!string.Equals(currentUri, targetUri, StringComparison.OrdinalIgnoreCase))
-        {
-            var navigation = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-            void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args) => navigation.TrySetResult(args);
-            _mappingWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
-            try
-            {
-                _mappingWebView.CoreWebView2.Navigate(targetUri);
-                var navigationResult = await navigation.Task.WaitAsync(TimeSpan.FromSeconds(45), cancellationToken);
-                if (!navigationResult.IsSuccess)
-                {
-                    throw new InvalidOperationException($"东方财富页面导航失败：{navigationResult.WebErrorStatus}");
-                }
-            }
-            finally
-            {
-                _mappingWebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
-            }
-        }
-        MappingLogger.Info("EastMoney page ready for script. TraceId={TraceId} CurrentUri={CurrentUri} ElapsedMs={ElapsedMs}", traceId, currentUri, stopwatch.ElapsedMilliseconds);
-
-        var runId = Guid.NewGuid().ToString("N");
-        _activeMappingRunId = runId;
-        var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
-        {
-            try
-            {
-                var message = args.TryGetWebMessageAsString();
-                using var document = JsonDocument.Parse(message);
-                var root = document.RootElement;
-                if (!root.TryGetProperty("runId", out var messageRunId)
-                    || !string.Equals(messageRunId.GetString(), runId, StringComparison.Ordinal))
-                {
-                    return;
-                }
-
-                var kind = root.GetProperty("kind").GetString();
-                if (string.Equals(kind, "progress", StringComparison.Ordinal))
-                {
-                    var completed = root.GetProperty("completed").GetInt32();
-                    var total = root.GetProperty("total").GetInt32();
-                    var boardName = root.GetProperty("boardName").GetString();
-                    MappingUpdateStatusText.Text = $"概念行业：正在采集 {completed}/{total}，{boardName}";
-                    MappingPageStateText.Text = $"采集中 {completed}/{total}";
-                    return;
-                }
-
-                if (string.Equals(kind, "result", StringComparison.Ordinal))
-                {
-                    completion.TrySetResult(root.GetProperty("payload").GetRawText());
-                    return;
-                }
-
-                if (string.Equals(kind, "error", StringComparison.Ordinal))
-                {
-                    completion.TrySetException(new InvalidOperationException(
-                        $"东方财富采集失败：{root.GetProperty("error").GetString()}"));
-                }
-            }
-            catch (Exception ex)
-            {
-                MappingLogger.Error(ex, "WebView2 mapping message processing failed. TraceId={TraceId} RunId={RunId}", traceId, runId);
-                completion.TrySetException(ex);
-            }
-        }
-        _mappingWebView.CoreWebView2.WebMessageReceived += OnMessage;
-        var script = $$$"""
-            (async () => {
-              const runId='{{{runId}}}';
-              if(window.__asrMappingRun?.controller){
-                window.__asrMappingRun.controller.abort();
-              }
-              const controller=new AbortController();
-              const signal=controller.signal;
-              window.__asrMappingRun={runId,controller};
-              const fields='f12,f14';
-              const post=(value)=>chrome.webview.postMessage(JSON.stringify({runId,...value}));
-              async function fetchJson(url){
-                let lastError;
-                for(let attempt=1;attempt<=3;attempt++){
-                  try{
-                    const response=await fetch(url,{signal,cache:'no-store'});
-                    if(!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-                    return await response.json();
-                  }catch(error){
-                    if(signal.aborted) throw error;
-                    lastError=error;
-                    if(attempt<3) await new Promise(resolve=>setTimeout(resolve,attempt*500));
-                  }
-                }
-                throw lastError;
-              }
-              async function boards(type){
-                const pageSize=100;
-                async function page(pageNumber){
-                  const url=`https://push2.eastmoney.com/api/qt/clist/get?pn=${pageNumber}&pz=${pageSize}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:${type}&fields=${fields}`;
-                  return await fetchJson(url);
-                }
-                const first=await page(1);
-                const firstItems=first?.data?.diff||[];
-                const total=Number(first?.data?.total||firstItems.length);
-                const pageCount=Math.ceil(total/pageSize);
-                if(pageCount<=1) return firstItems;
-                const remainingPages=Array.from({length:pageCount-1},(_,index)=>index+2);
-                const remaining=await mapLimit(remainingPages,4,async pageNumber=>(await page(pageNumber))?.data?.diff||[]);
-                return firstItems.concat(...remaining);
-              }
-              async function members(board){
-                const url=`https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${board.f12}+f:!50&fields=f12,f14`;
-                const json=await fetchJson(url);
-                return (json?.data?.diff||[]).map(x=>({symbol:x.f12,name:x.f14}));
-              }
-              async function mapLimit(items,limit,work){
-                const result=new Array(items.length);
-                let next=0;
-                async function worker(){
-                  while(true){
-                    const index=next++;
-                    if(index>=items.length) return;
-                    result[index]=await work(items[index],index);
-                  }
-                }
-                await Promise.all(Array.from({length:Math.min(limit,items.length)},worker));
-                return result;
-              }
-              const [sectorBoards,conceptBoards]=await Promise.all([boards(2),boards(3)]);
-              const allBoards=[
-                ...sectorBoards.map(board=>({kind:'sector',board})),
-                ...conceptBoards.map(board=>({kind:'concept',board}))
-              ];
-              const total=allBoards.length;
-              let completed=0;
-              const collected=await mapLimit(allBoards,8,async item=>{
-                const result={code:item.board.f12,name:item.board.f14,members:await members(item.board)};
-                completed++;
-                post({kind:'progress',completed,total,boardName:item.board.f14});
-                return {kind:item.kind,result};
-              });
-              const sectors=collected.filter(x=>x.kind==='sector').map(x=>x.result);
-              const concepts=collected.filter(x=>x.kind==='concept').map(x=>x.result);
-              if(signal.aborted) throw new DOMException('Mapping collection canceled.','AbortError');
-              post({kind:'result',payload:{sectors,concepts}});
-            })().catch(error => {
-              const runId='{{{runId}}}';
-              chrome.webview.postMessage(JSON.stringify({
-                runId,
-                kind:'error',
-                error:error?.name==='AbortError'?'采集已取消':String(error)
-              }));
-            })
-            """;
-        MappingLogger.Info("EastMoney collection script execution started. TraceId={TraceId}", traceId);
-        var scriptResult = await _mappingWebView.ExecuteScriptAsync(script);
-        MappingLogger.Info(
-            "EastMoney collection script dispatched. TraceId={TraceId} ExecuteResultLength={ExecuteResultLength} ElapsedMs={ElapsedMs}",
-            traceId,
-            scriptResult?.Length ?? 0,
-            stopwatch.ElapsedMilliseconds);
-        using var collectionTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        collectionTimeout.CancelAfter(TimeSpan.FromMinutes(5));
-        using var registration = collectionTimeout.Token.Register(() =>
-        {
-            completion.TrySetCanceled(collectionTimeout.Token);
-            _ = Dispatcher.InvokeAsync(async () =>
-            {
-                if (_mappingWebView?.CoreWebView2 is not null)
-                {
-                    await _mappingWebView.ExecuteScriptAsync(
-                        $"if(window.__asrMappingRun?.runId==='{runId}')window.__asrMappingRun.controller.abort();");
-                }
-            });
-        });
-        string json;
         try
         {
-            json = await completion.Task;
-        }
-        finally
-        {
-            _mappingWebView.CoreWebView2.WebMessageReceived -= OnMessage;
-            if (string.Equals(_activeMappingRunId, runId, StringComparison.Ordinal))
+            mappingWindow.SetStatus("正在初始化 WebView2...");
+            _activeMappingTraceId = traceId;
+            _mappingWebView = mappingWindow.Browser;
+            await _mappingWebView.EnsureCoreWebView2Async();
+            _mappingWebView.CoreWebView2.WebResourceResponseReceived += MappingWebResourceResponseReceived;
+            navigationStartingHandler = (_, args) =>
+                MappingLogger.Info("WebView2 navigation started. NavigationId={NavigationId} Uri={Uri} TraceId={TraceId}", args.NavigationId, args.Uri, _activeMappingTraceId);
+            navigationCompletedHandler = (_, args) =>
+                MappingLogger.Info(
+                    "WebView2 navigation completed. NavigationId={NavigationId} Success={Success} WebErrorStatus={WebErrorStatus} TraceId={TraceId}",
+                    args.NavigationId,
+                    args.IsSuccess,
+                    args.WebErrorStatus,
+                    _activeMappingTraceId);
+            _mappingWebView.CoreWebView2.NavigationStarting += navigationStartingHandler;
+            _mappingWebView.CoreWebView2.NavigationCompleted += navigationCompletedHandler;
+            MappingLogger.Info(
+                "WebView2 initialization completed. RuntimeVersion={RuntimeVersion} UserDataFolder={UserDataFolder} ElapsedMs={ElapsedMs}",
+                _mappingWebView.CoreWebView2.Environment.BrowserVersionString,
+                _mappingWebView.CoreWebView2.Environment.UserDataFolder,
+                stopwatch.ElapsedMilliseconds);
+            MappingLogger.Info("WebView2 mapping collection started. TraceId={TraceId} Uri={Uri}", traceId, targetUri);
+            mappingWindow.SetStatus("正在打开东方财富概念板块页面...");
+
+            var currentUri = _mappingWebView.Source?.AbsoluteUri ?? _mappingWebView.CoreWebView2.Source;
+            if (!string.Equals(currentUri, targetUri, StringComparison.OrdinalIgnoreCase))
             {
-                _activeMappingRunId = null;
+                await NavigateWebViewAsync(_mappingWebView, targetUri, TimeSpan.FromSeconds(45), cancellationToken);
             }
-        }
-        MappingLogger.Info("EastMoney collection JSON received. TraceId={TraceId} JsonLength={JsonLength} ElapsedMs={ElapsedMs}", traceId, json.Length, stopwatch.ElapsedMilliseconds);
-        using (var errorDocument = JsonDocument.Parse(json))
-        {
-            if (errorDocument.RootElement.TryGetProperty("error", out var error))
+
+            MappingLogger.Info(
+                "EastMoney page ready for WebView navigation collection. TraceId={TraceId} CurrentUri={CurrentUri} ElapsedMs={ElapsedMs}",
+                traceId,
+                _mappingWebView.CoreWebView2.Source,
+                stopwatch.ElapsedMilliseconds);
+            mappingWindow.SetStatus("东方财富页面已打开，正在读取行业/概念板块...");
+
+            var sectors = (await LoadEastMoneyBoardsAsync(_mappingWebView, traceId, mappingWindow, type: 2, label: "行业", maxBoards: null, cancellationToken))
+                .Where(board => EastMoneyFirstLevelIndustryNames.Contains(board.Name))
+                .ToList();
+            var concepts = await LoadEastMoneyBoardsAsync(_mappingWebView, traceId, mappingWindow, type: 3, label: "概念", maxBoards: 100, cancellationToken);
+            var allBoards = sectors
+                .Select(board => (Kind: "行业", Board: board))
+                .Concat(concepts.Select(board => (Kind: "概念", Board: board)))
+                .ToArray();
+
+            var completed = 0;
+            foreach (var item in allBoards)
             {
-                MappingLogger.Error("EastMoney collection script returned an error. TraceId={TraceId} Error={Error}", traceId, error.GetString());
-                throw new InvalidOperationException($"东方财富采集失败：{error.GetString()}");
+                cancellationToken.ThrowIfCancellationRequested();
+                completed++;
+                MappingUpdateStatusText.Text = $"概念行业：正在采集 {completed}/{allBoards.Length}，{item.Board.Name}";
+                MappingPageStateText.Text = $"采集中 {completed}/{allBoards.Length}";
+                mappingWindow.SetStatus($"正在采集 {completed}/{allBoards.Length}：{item.Board.Name}");
+                item.Board.Members.AddRange(await LoadEastMoneyBoardMembersAsync(
+                    _mappingWebView,
+                    mappingWindow,
+                    traceId,
+                    item.Kind,
+                    item.Board,
+                    cancellationToken));
+                await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
             }
-        }
-        var payload = JsonSerializer.Deserialize<MappingPayload>(json, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        }) ?? throw new InvalidOperationException("东方财富没有返回映射数据。");
+
+            var payload = new MappingPayload(sectors, concepts);
         if (payload.Sectors.Count == 0 || payload.Concepts.Count == 0)
         {
             throw new InvalidOperationException("东方财富返回的行业或概念列表为空。");
@@ -484,8 +370,433 @@ public partial class MainWindow : Window
             payload.Sectors.Sum(board => board.Members.Count),
             payload.Concepts.Sum(board => board.Members.Count),
             stopwatch.ElapsedMilliseconds);
-        _activeMappingTraceId = null;
+        mappingWindow.SetStatus("采集完成。");
         return payload;
+        }
+        finally
+        {
+            if (_mappingWebView?.CoreWebView2 is not null)
+            {
+                _mappingWebView.CoreWebView2.WebResourceResponseReceived -= MappingWebResourceResponseReceived;
+                if (navigationStartingHandler is not null)
+                {
+                    _mappingWebView.CoreWebView2.NavigationStarting -= navigationStartingHandler;
+                }
+
+                if (navigationCompletedHandler is not null)
+                {
+                    _mappingWebView.CoreWebView2.NavigationCompleted -= navigationCompletedHandler;
+                }
+            }
+
+            _activeMappingTraceId = null;
+            _mappingWebView = null;
+        }
+    }
+
+    private async Task<List<MappingBoard>> LoadEastMoneyBoardsAsync(
+        WebView2 browser,
+        string traceId,
+        MappingWebViewWindow mappingWindow,
+        int type,
+        string label,
+        int? maxBoards,
+        CancellationToken cancellationToken)
+    {
+        var pageSize = maxBoards is > 0 ? maxBoards.Value : 10000;
+        var boards = new List<MappingBoard>();
+        var pageNumber = 1;
+        var total = 0;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            mappingWindow.SetStatus($"正在读取东方财富{label}板块列表...");
+            var fs = Uri.EscapeDataString($"m:90+t:{type}");
+            var fields = Uri.EscapeDataString("f12,f14");
+            var url = $"https://push2.eastmoney.com/api/qt/clist/get?pn={pageNumber}&pz={pageSize}&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs={fs}&fields={fields}";
+            using var document = await LoadEastMoneyJsonDocumentViaWebViewAsync(browser, mappingWindow, url, traceId, $"{label}板块列表第 {pageNumber} 页", cancellationToken);
+            var pageBoards = ReadMappingBoards(document.RootElement);
+            if (total <= 0)
+            {
+                total = ReadEastMoneyTotal(document.RootElement, pageBoards.Count);
+            }
+
+            boards.AddRange(maxBoards.HasValue
+                ? pageBoards.Take(Math.Max(maxBoards.Value - boards.Count, 0))
+                : pageBoards);
+            pageNumber++;
+        }
+        while (!maxBoards.HasValue && boards.Count < total && total > 0);
+
+        MappingLogger.Info(
+            "EastMoney board list loaded. TraceId={TraceId} Label={Label} Type={Type} Count={Count} Total={Total}",
+            traceId,
+            label,
+            type,
+            boards.Count,
+            total);
+        return boards;
+    }
+
+    private async Task<List<MappingMember>> LoadEastMoneyBoardMembersAsync(
+        WebView2 browser,
+        MappingWebViewWindow mappingWindow,
+        string traceId,
+        string kind,
+        MappingBoard board,
+        CancellationToken cancellationToken)
+    {
+        var fs = Uri.EscapeDataString($"b:{board.Code}+f:!50");
+        var fields = Uri.EscapeDataString("f12,f14");
+        var url = $"https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10000&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs={fs}&fields={fields}";
+        try
+        {
+            using var document = await LoadEastMoneyJsonDocumentViaWebViewAsync(browser, mappingWindow, url, traceId, $"{kind}成分股 {board.Name}({board.Code})", cancellationToken);
+            var members = ReadMappingMembers(document.RootElement);
+            MappingLogger.Debug(
+                "EastMoney board members loaded. TraceId={TraceId} Kind={Kind} BoardCode={BoardCode} BoardName={BoardName} MemberCount={MemberCount}",
+                traceId,
+                kind,
+                board.Code,
+                board.Name,
+                members.Count);
+            return members;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            MappingLogger.Error(
+                ex,
+                "EastMoney board members failed and will be skipped. TraceId={TraceId} Kind={Kind} BoardCode={BoardCode} BoardName={BoardName}",
+                traceId,
+                kind,
+                board.Code,
+                board.Name);
+            MappingUpdateStatusText.Text = $"概念行业：跳过 {kind} {board.Name}，继续采集";
+            return [];
+        }
+    }
+
+    private async Task<JsonDocument> LoadEastMoneyJsonDocumentViaWebViewAsync(
+        WebView2 browser,
+        MappingWebViewWindow mappingWindow,
+        string url,
+        string traceId,
+        string stage,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastException = null;
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var body = await NavigateAndReadBodyTextAsync(browser, url, TimeSpan.FromSeconds(30), cancellationToken);
+                if (IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
+                {
+                    await WaitForManualEastMoneyVerificationAsync(browser, mappingWindow, traceId, stage, cancellationToken);
+                    continue;
+                }
+
+                var json = NormalizeEastMoneyJson(body);
+                MappingLogger.Debug(
+                    "EastMoney API body loaded. TraceId={TraceId} Stage={Stage} Attempt={Attempt} BodyLength={BodyLength} JsonLength={JsonLength} Uri={Uri}",
+                    traceId,
+                    stage,
+                    attempt,
+                    body.Length,
+                    json.Length,
+                    url);
+                return JsonDocument.Parse(json);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastException = ex;
+                MappingLogger.Warn(
+                    ex,
+                    "EastMoney API load attempt failed. TraceId={TraceId} Stage={Stage} Attempt={Attempt} Uri={Uri}",
+                    traceId,
+                    stage,
+                    attempt,
+                    url);
+                await RecoverEastMoneyBrowserAsync(browser, mappingWindow, traceId, stage, cancellationToken);
+                await Task.Delay(TimeSpan.FromMilliseconds(900 * attempt), cancellationToken);
+            }
+        }
+
+        throw new InvalidOperationException($"东方财富接口读取失败：{stage}，{lastException?.Message}", lastException);
+    }
+
+    private async Task RecoverEastMoneyBrowserAsync(
+        WebView2 browser,
+        MappingWebViewWindow mappingWindow,
+        string traceId,
+        string stage,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            MappingLogger.Debug("Recovering EastMoney WebView navigation state. TraceId={TraceId} Stage={Stage}", traceId, stage);
+            await NavigateWebViewAsync(
+                browser,
+                "https://quote.eastmoney.com/center/gridlist.html#concept_board",
+                TimeSpan.FromSeconds(15),
+                cancellationToken);
+            var body = await ReadWebViewBodyTextAsync(browser, cancellationToken);
+            if (IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
+            {
+                await WaitForManualEastMoneyVerificationAsync(browser, mappingWindow, traceId, stage, cancellationToken);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            MappingLogger.Warn(ex, "EastMoney WebView navigation state recovery failed. TraceId={TraceId} Stage={Stage}", traceId, stage);
+        }
+    }
+
+    private async Task NavigateWebViewAsync(
+        WebView2 browser,
+        string url,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args) => completion.TrySetResult(args);
+        browser.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+        try
+        {
+            browser.CoreWebView2.Navigate(url);
+            var navigationResult = await completion.Task.WaitAsync(timeout, cancellationToken);
+            if (!navigationResult.IsSuccess)
+            {
+                throw new InvalidOperationException($"WebView2 导航失败：{navigationResult.WebErrorStatus}，{url}");
+            }
+        }
+        finally
+        {
+            browser.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+        }
+    }
+
+    private async Task<string> NavigateAndReadBodyTextAsync(
+        WebView2 browser,
+        string url,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        await NavigateWebViewAsync(browser, url, timeout, cancellationToken);
+        for (var attempt = 1; attempt <= 10; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var body = await ReadWebViewBodyTextAsync(browser, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                return body;
+            }
+
+            await Task.Delay(200, cancellationToken);
+        }
+
+        throw new InvalidOperationException($"WebView2 已导航但页面内容为空：{url}");
+    }
+
+    private static async Task<string> ReadWebViewBodyTextAsync(WebView2 browser, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var raw = await browser.ExecuteScriptAsync(
+            "document.body ? document.body.innerText : (document.documentElement ? document.documentElement.innerText : '')");
+        return JsonSerializer.Deserialize<string>(raw) ?? string.Empty;
+    }
+
+    private async Task WaitForManualEastMoneyVerificationAsync(
+        WebView2 browser,
+        MappingWebViewWindow mappingWindow,
+        string traceId,
+        string stage,
+        CancellationToken cancellationToken)
+    {
+        MappingLogger.Warn(
+            "EastMoney verification challenge detected. TraceId={TraceId} Stage={Stage} Uri={Uri}",
+            traceId,
+            stage,
+            browser.CoreWebView2.Source);
+        MappingUpdateStatusText.Text = "概念行业：检测到东方财富滑动验证，等待手动完成";
+        MappingPageStateText.Text = "等待验证";
+        mappingWindow.SetStatus("检测到东方财富滑动验证，请在此窗口中手动完成验证；通过后会自动继续采集。");
+
+        var startedAt = DateTimeOffset.Now;
+        while (DateTimeOffset.Now - startedAt < TimeSpan.FromMinutes(5))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+
+            string body;
+            try
+            {
+                body = await ReadWebViewBodyTextAsync(browser, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                MappingLogger.Debug(ex, "EastMoney verification body read failed while waiting. TraceId={TraceId} Stage={Stage}", traceId, stage);
+                continue;
+            }
+
+            if (!IsEastMoneyVerificationPage(body, browser.CoreWebView2.Source))
+            {
+                MappingLogger.Info(
+                    "EastMoney verification challenge cleared. TraceId={TraceId} Stage={Stage} WaitSeconds={WaitSeconds} Uri={Uri}",
+                    traceId,
+                    stage,
+                    Math.Round((DateTimeOffset.Now - startedAt).TotalSeconds, 1),
+                    browser.CoreWebView2.Source);
+                MappingUpdateStatusText.Text = "概念行业：验证已通过，继续采集";
+                MappingPageStateText.Text = "采集中";
+                mappingWindow.SetStatus("验证已通过，正在继续采集...");
+                return;
+            }
+        }
+
+        throw new TimeoutException("等待东方财富滑动验证超时，请重新点击更新概念后在弹出窗口中完成验证。");
+    }
+
+    private static bool IsEastMoneyVerificationPage(string body, string? uri)
+    {
+        if (!string.IsNullOrWhiteSpace(uri)
+            && uri.Contains("captcha", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        return body.Contains("滑动验证", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("安全验证", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("请拖动", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("拖动滑块", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("验证码", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("captcha", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("verify", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeEastMoneyJson(string body)
+    {
+        var text = body.Trim().Trim('\uFEFF');
+        if (text.Length == 0)
+        {
+            throw new InvalidOperationException("东方财富接口返回空内容。");
+        }
+
+        var open = text.IndexOf('(');
+        var close = text.LastIndexOf(')');
+        if (open > 0 && close > open && text[..open].All(IsJavaScriptIdentifierChar))
+        {
+            text = text[(open + 1)..close].Trim();
+        }
+
+        if (!text.StartsWith('{'))
+        {
+            var firstBrace = text.IndexOf('{');
+            var lastBrace = text.LastIndexOf('}');
+            if (firstBrace >= 0 && lastBrace > firstBrace)
+            {
+                text = text[firstBrace..(lastBrace + 1)];
+            }
+        }
+
+        return text;
+    }
+
+    private static bool IsJavaScriptIdentifierChar(char value)
+    {
+        return char.IsLetterOrDigit(value) || value is '_' or '$' or '.';
+    }
+
+    private static List<MappingBoard> ReadMappingBoards(JsonElement root)
+    {
+        var result = new List<MappingBoard>();
+        if (!TryGetEastMoneyDiff(root, out var diff))
+        {
+            return result;
+        }
+
+        foreach (var item in diff.EnumerateArray())
+        {
+            var code = ReadEastMoneyString(item, "f12");
+            var name = ReadEastMoneyString(item, "f14");
+            if (!string.IsNullOrWhiteSpace(code) && !string.IsNullOrWhiteSpace(name))
+            {
+                result.Add(new MappingBoard(code, name, []));
+            }
+        }
+
+        return result;
+    }
+
+    private static List<MappingMember> ReadMappingMembers(JsonElement root)
+    {
+        var result = new List<MappingMember>();
+        if (!TryGetEastMoneyDiff(root, out var diff))
+        {
+            return result;
+        }
+
+        foreach (var item in diff.EnumerateArray())
+        {
+            var symbol = ReadEastMoneyString(item, "f12");
+            var name = ReadEastMoneyString(item, "f14");
+            if (!string.IsNullOrWhiteSpace(symbol) && !string.IsNullOrWhiteSpace(name))
+            {
+                result.Add(new MappingMember(symbol, name));
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryGetEastMoneyDiff(JsonElement root, out JsonElement diff)
+    {
+        diff = default;
+        return root.TryGetProperty("data", out var data)
+            && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("diff", out diff)
+            && diff.ValueKind == JsonValueKind.Array;
+    }
+
+    private static int ReadEastMoneyTotal(JsonElement root, int fallback)
+    {
+        if (root.TryGetProperty("data", out var data)
+            && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("total", out var total))
+        {
+            if (total.ValueKind == JsonValueKind.Number && total.TryGetInt32(out var numericTotal))
+            {
+                return numericTotal;
+            }
+
+            if (total.ValueKind == JsonValueKind.String && int.TryParse(total.GetString(), out var stringTotal))
+            {
+                return stringTotal;
+            }
+        }
+
+        return fallback;
+    }
+
+    private static string ReadEastMoneyString(JsonElement item, string propertyName)
+    {
+        if (!item.TryGetProperty(propertyName, out var property))
+        {
+            return string.Empty;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.String => property.GetString() ?? string.Empty,
+            JsonValueKind.Number => property.GetRawText(),
+            _ => property.ToString()
+        };
     }
 
     private sealed record MappingPayload(List<MappingBoard> Sectors, List<MappingBoard> Concepts);
@@ -520,6 +831,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -536,6 +848,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -552,6 +865,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -568,6 +882,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = true;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -591,6 +906,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = true;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -605,6 +921,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = true;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -619,6 +936,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = true;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -627,12 +945,28 @@ public partial class MainWindow : Window
         await RefreshAsync();
     }
 
+    private async void StrategyReviewViewButton_Click(object sender, RoutedEventArgs e)
+    {
+        _showResearchPage = true;
+        _showMarketSentiment = false;
+        _showHistory = false;
+        _showPredictionReview = false;
+        _showStrategyReview = true;
+        _showStrategyCenter = false;
+        _showLongTermTracking = false;
+        _showBacktest = false;
+        _showStockPools = false;
+        ApplyWorkspaceVisibility();
+        await RefreshStrategyReviewAsync();
+    }
+
     private async void LongTermTrackingViewButton_Click(object sender, RoutedEventArgs e)
     {
         _showResearchPage = true;
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = true;
         _showBacktest = false;
@@ -647,6 +981,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = true;
@@ -660,6 +995,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -676,6 +1012,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = false;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -712,6 +1049,7 @@ public partial class MainWindow : Window
         _showMarketSentiment = false;
         _showHistory = true;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -750,6 +1088,7 @@ public partial class MainWindow : Window
             _showMarketSentiment = false;
             _showHistory = false;
             _showPredictionReview = false;
+            _showStrategyReview = false;
             _showStrategyCenter = false;
             _showLongTermTracking = false;
             _showBacktest = false;
@@ -802,6 +1141,7 @@ public partial class MainWindow : Window
 
         _showHistory = true;
         _showPredictionReview = false;
+        _showStrategyReview = false;
         _showStrategyCenter = false;
         _showLongTermTracking = false;
         _showBacktest = false;
@@ -839,6 +1179,70 @@ public partial class MainWindow : Window
     private async void RefreshPredictionButton_Click(object sender, RoutedEventArgs e)
     {
         await RefreshPredictionReviewAsync();
+    }
+
+    private async void RefreshStrategyReviewButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunUiActionAsync(RefreshStrategyReviewAsync);
+    }
+
+    private async void RecalculateStrategyReviewButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunUiActionAsync(async token =>
+        {
+            StrategyReviewSummaryText.Text = "正在重算策略命中后的收益统计...";
+            var result = await _apiClient.RecalculateSignalReturnsAsync(
+                new SignalReturnRecalculateRequestDto(
+                    GetSelectedDateOnly(StrategyReviewFromDatePicker),
+                    GetSelectedDateOnly(StrategyReviewToDatePicker),
+                    null,
+                    GetOptionalText(StrategyReviewStrategyCodeTextBox),
+                    null,
+                    GetOptionalText(StrategyReviewVersionTextBox),
+                    null,
+                    GetSelectedComboTag(StrategyReviewHorizonComboBox),
+                    null,
+                    5000),
+                token);
+
+            StrategyReviewSummaryText.Text = result is null
+                ? "重算完成，但后端没有返回统计结果。"
+                : $"重算完成：来源 {result.SourceSignalCount} 条，处理 {result.ProcessedSignalCount} 条，写入 {result.RecordCount} 条，失败 {result.FailedSignalCount} 条。";
+            await RefreshStrategyReviewAsync(token);
+        }, TimeSpan.FromMinutes(5));
+    }
+
+    private async void StrategyReturnRecordDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (StrategyReturnRecordDataGrid.SelectedItem is not StrategyReturnRecordDisplay item)
+        {
+            StrategyReviewSelectedSignalText.Text = "选择一条命中明细后显示热度上下文和版本绑定。";
+            StrategyReviewSignalEvidenceItemsControl.ItemsSource = Array.Empty<StrategyReviewHeatDisplay>();
+            return;
+        }
+
+        try
+        {
+            StrategyReviewSelectedSignalText.Text = $"正在读取 {item.StockText} 的命中证据...";
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var heatTask = _apiClient.GetSignalHeatContextAsync(item.EventId, timeout.Token);
+            var versionTask = _apiClient.GetSignalStrategyVersionsAsync(item.EventId, timeout.Token);
+            await Task.WhenAll(heatTask, versionTask);
+
+            var heatContexts = heatTask.Result;
+            var versions = versionTask.Result;
+            StrategyReviewSignalEvidenceItemsControl.ItemsSource = heatContexts
+                .Select(ToStrategyReviewHeatDisplay)
+                .ToArray();
+            StrategyReviewSelectedSignalText.Text = versions.Count == 0
+                ? $"{item.StockText} 暂无策略版本绑定；可能是旧命中或尚未重新扫描。"
+                : $"{item.StockText} 版本：{string.Join(" / ", versions.Select(version => $"{version.StrategyCode} {version.Version}"))}";
+        }
+        catch (Exception ex)
+        {
+            StrategyReviewSelectedSignalText.Text = $"读取命中证据失败：{ex.Message}";
+            StrategyReviewSignalEvidenceItemsControl.ItemsSource = Array.Empty<StrategyReviewHeatDisplay>();
+        }
     }
 
     private async void BackgroundJobLogButton_Click(object sender, RoutedEventArgs e)
@@ -1506,6 +1910,12 @@ public partial class MainWindow : Window
             var conceptHeatTask = !_showResearchPage
                 ? _apiClient.GetConceptHeatAsync(5000, cancellationToken)
                 : Task.FromResult<IReadOnlyList<HeatBoardItemDto>>([]);
+            var mappingSectorBoardsTask = !_showResearchPage
+                ? _apiClient.GetSectorMappingBoardsAsync(1000, cancellationToken)
+                : Task.FromResult<IReadOnlyList<MappingBoardItemDto>>([]);
+            var mappingConceptBoardsTask = !_showResearchPage
+                ? _apiClient.GetConceptMappingBoardsAsync(100, cancellationToken)
+                : Task.FromResult<IReadOnlyList<MappingBoardItemDto>>([]);
             var strategiesTask = _showStrategyCenter
                 ? _apiClient.GetStrategiesAsync(cancellationToken)
                 : Task.FromResult<IReadOnlyList<StrategyDefinitionDto>>([]);
@@ -1537,6 +1947,8 @@ public partial class MainWindow : Window
                 eventsTask,
                 sectorHeatTask,
                 conceptHeatTask,
+                mappingSectorBoardsTask,
+                mappingConceptBoardsTask,
                 historicalDataStatusTask,
                 activeJobsTask,
                 latestJobTask,
@@ -1602,6 +2014,8 @@ public partial class MainWindow : Window
 
                 _mappingSectorHeatItems = sectorHeatTask.Result;
                 _mappingConceptHeatItems = conceptHeatTask.Result;
+                _mappingSectorBoardItems = mappingSectorBoardsTask.Result;
+                _mappingConceptBoardItems = mappingConceptBoardsTask.Result;
                 ApplyMappingHeatFilters();
             }
 
@@ -1696,7 +2110,19 @@ public partial class MainWindow : Window
         }
 
         StatusText.Text = $"市场: {TranslateMarketStatus(status.MarketStatus)}  |  监控: {TranslateMonitorStatus(status.MonitorStatus)}  |  数据源: {BuildMarketDataLabel(marketDataStatus)}  |  上次扫描: {FormatTime(status.LastScanTime)}  |  下次扫描: {FormatTime(status.NextScanTime)}";
-        SummaryText.Text = $"活跃机会: {status.ActiveOpportunityCount}   今日新增: {status.TodayNewCount}   消失: {status.DisappearedCount}   重点跟踪: {status.FocusedCount}";
+        SummaryText.Text = $"实时池: {TranslatePoolStatus(status.RealtimePoolStatus)} {status.RealtimePoolSignalCount}  |  观察池: {TranslatePoolStatus(status.ObservationPoolStatus)} {status.ObservationPoolSignalCount}  |  平台预警: {status.PlatformBreakoutAlertCount} / 确认: {status.PlatformBreakoutConfirmedCount}  |  活跃机会: {status.ActiveOpportunityCount}   今日新增: {status.TodayNewCount}   消失: {status.DisappearedCount}   重点跟踪: {status.FocusedCount}";
+    }
+
+    private static string TranslatePoolStatus(string value)
+    {
+        return value switch
+        {
+            "Running" => "运行",
+            "Scanning" => "扫描",
+            "Paused" => "暂停",
+            "NotStarted" => "未启动",
+            _ => value
+        };
     }
 
     private void ApplyHistoricalDataUpdateStatus(HistoricalDataUpdateStatusDto? status)
@@ -2165,6 +2591,17 @@ public partial class MainWindow : Window
             .ToArray();
     }
 
+    private static HeatBoardDisplay[] BuildMappingBoardDisplays(IReadOnlyList<MappingBoardItemDto> items)
+    {
+        return items
+            .Select(item => new HeatBoardDisplay(
+                item.Name,
+                $"第 {item.Rank}",
+                $"成分股 {item.StockCount} 只   代码 {item.Code}",
+                "按东方财富页面涨幅榜顺序"))
+            .ToArray();
+    }
+
     private void MappingHeatSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         ApplyMappingHeatFilters();
@@ -2174,12 +2611,20 @@ public partial class MainWindow : Window
     {
         var sectorQuery = MappingSectorSearchBox?.Text?.Trim() ?? string.Empty;
         var conceptQuery = MappingConceptSearchBox?.Text?.Trim() ?? string.Empty;
-        MappingSectorHeatItemsControl.ItemsSource = BuildHeatBoardDisplays(_mappingSectorHeatItems
-            .Where(item => string.IsNullOrWhiteSpace(sectorQuery) || item.Name.Contains(sectorQuery, StringComparison.OrdinalIgnoreCase))
-            .ToArray());
-        MappingConceptHeatItemsControl.ItemsSource = BuildHeatBoardDisplays(_mappingConceptHeatItems
-            .Where(item => string.IsNullOrWhiteSpace(conceptQuery) || item.Name.Contains(conceptQuery, StringComparison.OrdinalIgnoreCase))
-            .ToArray());
+        MappingSectorHeatItemsControl.ItemsSource = _mappingSectorBoardItems.Count > 0
+            ? BuildMappingBoardDisplays(_mappingSectorBoardItems
+                .Where(item => string.IsNullOrWhiteSpace(sectorQuery) || item.Name.Contains(sectorQuery, StringComparison.OrdinalIgnoreCase))
+                .ToArray())
+            : BuildHeatBoardDisplays(_mappingSectorHeatItems
+                .Where(item => string.IsNullOrWhiteSpace(sectorQuery) || item.Name.Contains(sectorQuery, StringComparison.OrdinalIgnoreCase))
+                .ToArray());
+        MappingConceptHeatItemsControl.ItemsSource = _mappingConceptBoardItems.Count > 0
+            ? BuildMappingBoardDisplays(_mappingConceptBoardItems
+                .Where(item => string.IsNullOrWhiteSpace(conceptQuery) || item.Name.Contains(conceptQuery, StringComparison.OrdinalIgnoreCase))
+                .ToArray())
+            : BuildHeatBoardDisplays(_mappingConceptHeatItems
+                .Where(item => string.IsNullOrWhiteSpace(conceptQuery) || item.Name.Contains(conceptQuery, StringComparison.OrdinalIgnoreCase))
+                .ToArray());
     }
 
     private void ApplyHistoryStats(
@@ -2370,6 +2815,152 @@ public partial class MainWindow : Window
                 item.Return3Day,
                 item.Return5Day))
             .ToArray();
+    }
+
+    private async Task RefreshStrategyReviewAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var fromDate = GetSelectedDateOnly(StrategyReviewFromDatePicker);
+            var toDate = GetSelectedDateOnly(StrategyReviewToDatePicker);
+            var strategyCode = GetOptionalText(StrategyReviewStrategyCodeTextBox);
+            var strategyVersion = GetOptionalText(StrategyReviewVersionTextBox);
+            var horizonCode = GetSelectedComboTag(StrategyReviewHorizonComboBox);
+
+            StrategyReviewSummaryText.Text = "正在读取策略复盘数据...";
+            var summaryTask = _apiClient.GetSignalReturnSummaryAsync(fromDate, toDate, strategyCode, strategyVersion, horizonCode, 200, cancellationToken);
+            var recordsTask = _apiClient.GetSignalReturnRecordsAsync(fromDate, toDate, null, strategyCode, strategyVersion, horizonCode, null, 300, cancellationToken);
+            var versionsTask = _apiClient.GetStrategyVersionsAsync(strategyCode, cancellationToken);
+            var heatTask = _apiClient.GetLatestHeatSnapshotAsync(cancellationToken);
+
+            await Task.WhenAll(summaryTask, recordsTask, versionsTask, heatTask);
+            ApplyStrategyReview(summaryTask.Result, recordsTask.Result, versionsTask.Result, heatTask.Result);
+        }
+        catch (Exception ex)
+        {
+            StrategyReviewSummaryText.Text = $"策略复盘读取失败：{ex.Message}";
+            StrategyReturnSummaryDataGrid.ItemsSource = null;
+            StrategyReturnRecordDataGrid.ItemsSource = null;
+            StrategyVersionListBox.ItemsSource = null;
+            StrategyReviewSectorHeatItemsControl.ItemsSource = null;
+            StrategyReviewSignalEvidenceItemsControl.ItemsSource = null;
+        }
+    }
+
+    private void ApplyStrategyReview(
+        IReadOnlyList<SignalReturnStrategySummaryDto> summaries,
+        SignalReturnQueryResultDto? records,
+        IReadOnlyList<StrategyVersionDto> versions,
+        HeatSnapshotOverviewDto? heatSnapshot)
+    {
+        var completedCount = summaries.Sum(item => item.CompletedCount);
+        var signalCount = summaries.Sum(item => item.SignalCount);
+        var winCount = summaries.Sum(item => item.WinCount);
+        var averageReturn = CalculateWeightedAverageReturn(summaries);
+
+        StrategyReviewSignalMetricText.Text = signalCount.ToString();
+        StrategyReviewCompletedMetricText.Text = completedCount.ToString();
+        StrategyReviewWinRateMetricText.Text = completedCount > 0 ? $"{(decimal)winCount / completedCount * 100m:F1}%" : "--";
+        StrategyReviewAverageMetricText.Text = FormatPercent(averageReturn);
+        StrategyReviewAverageMetricText.Foreground = GetAshareReturnBrush(averageReturn);
+        StrategyReviewVersionMetricText.Text = versions.Count.ToString();
+
+        StrategyReturnSummaryDataGrid.ItemsSource = summaries
+            .OrderBy(item => item.StrategyGroup)
+            .ThenBy(item => item.StrategyName)
+            .ThenBy(item => item.HorizonCode)
+            .Select(item => new StrategyReturnSummaryDisplay(
+                item.StrategyName,
+                string.IsNullOrWhiteSpace(item.StrategyVersion) ? "--" : item.StrategyVersion,
+                $"{item.HorizonCode} {item.HorizonName}",
+                item.SignalCount.ToString(),
+                item.CompletedCount > 0 ? $"{item.WinRatePercent ?? 0m:F1}%" : "--",
+                FormatPercent(item.AverageReturnPercent),
+                GetAshareReturnBrush(item.AverageReturnPercent),
+                $"{FormatPercent(item.BestReturnPercent)} / {FormatPercent(item.WorstReturnPercent)}",
+                item.LastSignalTime.HasValue ? item.LastSignalTime.Value.ToLocalTime().ToString("MM-dd HH:mm") : "--"))
+            .ToArray();
+
+        var recordItems = records?.Items
+            .Select(item => new StrategyReturnRecordDisplay(
+                item.EventId,
+                $"{item.Symbol} {item.Name}",
+                item.StrategyName,
+                string.IsNullOrWhiteSpace(item.StrategyVersion) ? "--" : item.StrategyVersion,
+                item.EventTime.ToLocalTime().ToString("MM-dd HH:mm"),
+                item.EntryPrice.ToString("F2"),
+                FormatPercent(item.ReturnPercent),
+                GetAshareReturnBrush(item.ReturnPercent),
+                $"{FormatPercent(item.MaxReturnPercent)} / {FormatPercent(item.MinReturnPercent)}",
+                item.Status == "Completed" ? "完成" : "等待"))
+            .ToArray() ?? [];
+        StrategyReturnRecordDataGrid.ItemsSource = recordItems;
+        StrategyReturnRecordDataGrid.SelectedIndex = recordItems.Length > 0 ? 0 : -1;
+
+        StrategyVersionListBox.ItemsSource = versions
+            .OrderByDescending(item => string.Equals(item.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(item => item.StrategyName)
+            .Select(item => new StrategyVersionDisplay(
+                item.StrategyName,
+                item.Version,
+                item.Status,
+                string.Equals(item.Status, "Active", StringComparison.OrdinalIgnoreCase) ? (Brush)FindResource("SuccessBrush") : (Brush)FindResource("MutedTextBrush"),
+                string.Equals(item.Status, "Active", StringComparison.OrdinalIgnoreCase) ? (Brush)FindResource("PrimarySoftBrush") : (Brush)FindResource("SoftPanelBrush"),
+                $"创建 {item.CreatedAt.ToLocalTime():MM-dd HH:mm} | 激活 {(item.ActivatedAt.HasValue ? item.ActivatedAt.Value.ToLocalTime().ToString("MM-dd HH:mm") : "--")}",
+                item.RuleSummary))
+            .ToArray();
+
+        StrategyReviewHeatSummaryText.Text = heatSnapshot is null
+            ? "暂无热度快照。"
+            : $"最新快照 {heatSnapshot.SnapshotTime.ToLocalTime():MM-dd HH:mm} | 行业 {heatSnapshot.SectorCount} | 概念 {heatSnapshot.ConceptCount}";
+        StrategyReviewSectorHeatItemsControl.ItemsSource = heatSnapshot?.Sectors
+            .Take(5)
+            .Select(ToStrategyReviewHeatDisplay)
+            .ToArray() ?? [];
+
+        StrategyReviewSummaryText.Text = $"已加载收益汇总 {summaries.Count} 行，命中明细 {records?.TotalCount ?? 0} 条，策略版本 {versions.Count} 个。";
+    }
+
+    private static decimal? CalculateWeightedAverageReturn(IReadOnlyList<SignalReturnStrategySummaryDto> summaries)
+    {
+        var weighted = summaries
+            .Where(item => item.CompletedCount > 0 && item.AverageReturnPercent.HasValue)
+            .Select(item => (Weight: item.CompletedCount, Value: item.AverageReturnPercent!.Value))
+            .ToArray();
+        var totalWeight = weighted.Sum(item => item.Weight);
+        return totalWeight == 0 ? null : weighted.Sum(item => item.Value * item.Weight) / totalWeight;
+    }
+
+    private static StrategyReviewHeatDisplay ToStrategyReviewHeatDisplay(HeatSnapshotItemDto item)
+    {
+        return new StrategyReviewHeatDisplay(
+            $"#{item.HeatRank} {item.Name}",
+            $"热度 {item.HeatScore:F1}",
+            $"上涨 {item.RisingCount}/{item.StockCount} | {item.RisingRatioPercent:F1}% | 均涨 {item.AverageChangePercent:F2}%");
+    }
+
+    private static StrategyReviewHeatDisplay ToStrategyReviewHeatDisplay(SignalHeatContextDto item)
+    {
+        var prefix = item.ContextType.Equals("Sector", StringComparison.OrdinalIgnoreCase) ? "行业" : "概念";
+        return new StrategyReviewHeatDisplay(
+            $"{prefix} #{item.HeatRank} {item.Name}",
+            $"热度 {item.HeatScore:F1}",
+            $"上涨 {item.RisingCount}/{item.StockCount} | {item.RisingRatioPercent:F1}% | 均涨 {item.AverageChangePercent:F2}%");
+    }
+
+    private static DateOnly? GetSelectedDateOnly(Controls.RadarDatePicker picker)
+    {
+        return picker.SelectedDate.HasValue ? DateOnly.FromDateTime(picker.SelectedDate.Value) : null;
+    }
+
+    private static string? GetOptionalText(TextBox textBox)
+    {
+        return string.IsNullOrWhiteSpace(textBox.Text) ? null : textBox.Text.Trim();
+    }
+
+    private static string? GetSelectedComboTag(ComboBox comboBox)
+    {
+        return comboBox.SelectedItem is ComboBoxItem { Tag: string tag } && !string.IsNullOrWhiteSpace(tag) ? tag : null;
     }
 
     private async Task RefreshPredictionReviewAsync()
@@ -2705,6 +3296,7 @@ public partial class MainWindow : Window
         MarketSentimentPanel.Visibility = Visibility.Collapsed;
         HistoryStatsPanel.Visibility = _showHistory ? Visibility.Visible : Visibility.Collapsed;
         PredictionReviewPanel.Visibility = _showPredictionReview ? Visibility.Visible : Visibility.Collapsed;
+        StrategyReviewPanel.Visibility = _showStrategyReview ? Visibility.Visible : Visibility.Collapsed;
         StrategyCenterPanel.Visibility = _showStrategyCenter ? Visibility.Visible : Visibility.Collapsed;
         LongTermTrackingPanel.Visibility = _showLongTermTracking ? Visibility.Visible : Visibility.Collapsed;
         BacktestPanel.Visibility = _showBacktest ? Visibility.Visible : Visibility.Collapsed;
@@ -2739,6 +3331,7 @@ public partial class MainWindow : Window
         MarketSentimentViewButton.Visibility = Visibility.Collapsed;
         HistoryStatsViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         PredictionReviewViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
+        StrategyReviewViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         LongTermTrackingViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         StrategyCenterViewButton.Visibility = _showResearchPage ? Visibility.Visible : Visibility.Collapsed;
         BacktestViewButton.Visibility = Visibility.Collapsed;
@@ -2767,6 +3360,9 @@ public partial class MainWindow : Window
             ? (Style)FindResource("ReviewTabSelectedButtonStyle")
             : (Style)FindResource("ReviewTabButtonStyle");
         PredictionReviewViewButton.Style = _showPredictionReview
+            ? (Style)FindResource("ReviewTabSelectedButtonStyle")
+            : (Style)FindResource("ReviewTabButtonStyle");
+        StrategyReviewViewButton.Style = _showStrategyReview
             ? (Style)FindResource("ReviewTabSelectedButtonStyle")
             : (Style)FindResource("ReviewTabButtonStyle");
         LongTermTrackingViewButton.Style = _showLongTermTracking
@@ -3323,6 +3919,7 @@ public partial class MainWindow : Window
         MarketSentimentViewButton.IsEnabled = enabled;
         HistoryStatsViewButton.IsEnabled = enabled;
         PredictionReviewViewButton.IsEnabled = enabled;
+        StrategyReviewViewButton.IsEnabled = enabled;
         LongTermTrackingViewButton.IsEnabled = enabled;
         StrategyCenterViewButton.IsEnabled = enabled;
         BacktestViewButton.IsEnabled = enabled;
@@ -3336,6 +3933,13 @@ public partial class MainWindow : Window
         GeneratePredictionButton.IsEnabled = enabled;
         VerifyPredictionButton.IsEnabled = enabled;
         RefreshPredictionButton.IsEnabled = enabled;
+        RefreshStrategyReviewButton.IsEnabled = enabled;
+        RecalculateStrategyReviewButton.IsEnabled = enabled;
+        StrategyReviewFromDatePicker.IsEnabled = enabled;
+        StrategyReviewToDatePicker.IsEnabled = enabled;
+        StrategyReviewStrategyCodeTextBox.IsEnabled = enabled;
+        StrategyReviewVersionTextBox.IsEnabled = enabled;
+        StrategyReviewHorizonComboBox.IsEnabled = enabled;
         RunBacktestButton.IsEnabled = enabled;
         UseSelectedSymbolBacktestButton.IsEnabled = enabled;
         ExportBacktestButton.IsEnabled = enabled;
@@ -3588,9 +4192,15 @@ public partial class MainWindow : Window
         IReadOnlyDictionary<string, decimal>? metrics,
         IReadOnlyList<string>? tags)
     {
-        if (metrics is null || !metrics.TryGetValue("market_sentiment_temperature", out var temperature))
+        if (metrics is null)
         {
             return string.Empty;
+        }
+
+        var platformText = BuildPlatformBreakoutText(metrics);
+        if (!metrics.TryGetValue("market_sentiment_temperature", out var temperature))
+        {
+            return platformText;
         }
 
         var adjustment = metrics.TryGetValue("market_sentiment_adjustment", out var value) ? value : 0m;
@@ -3602,7 +4212,23 @@ public partial class MainWindow : Window
             < 0 => "降权",
             _ => "保持"
         };
-        return $"情绪 {temperature:F1} / {level}，{action} {adjustment:+0.##;-0.##;0} 分";
+        var sentimentText = $"情绪 {temperature:F1} / {level}，{action} {adjustment:+0.##;-0.##;0} 分";
+        return string.IsNullOrWhiteSpace(platformText) ? sentimentText : $"{platformText}  |  {sentimentText}";
+    }
+
+    private static string BuildPlatformBreakoutText(IReadOnlyDictionary<string, decimal> metrics)
+    {
+        if (!metrics.ContainsKey("weekly_platform_high"))
+        {
+            return string.Empty;
+        }
+
+        var platformHigh = metrics.TryGetValue("weekly_platform_high", out var high) ? high : 0m;
+        var breakout = metrics.TryGetValue("breakout_percent", out var distance) ? distance : 0m;
+        var thirtyPrice = metrics.TryGetValue("thirty_minute_breakout_price", out var price) ? price : 0m;
+        var volume = metrics.TryGetValue("thirty_minute_volume_ratio", out var thirtyVolume) ? thirtyVolume : 0m;
+        var confirmed = metrics.TryGetValue("thirty_minute_confirmed", out var value) && value >= 1m;
+        return $"周线平台 {platformHigh:F2}  |  30分钟价 {thirtyPrice:F2}  |  距平台 {breakout:+0.##;-0.##;0}%  |  30分钟量比 {volume:F2}  |  {(confirmed ? "已确认" : "预警待确认")}";
     }
 
     private static string TranslateMetricName(string key)
@@ -3618,6 +4244,16 @@ public partial class MainWindow : Window
             "recent_range_percent" => "近期振幅",
             "resistance_touch_count" => "压力触碰",
             "breakout_percent" => "突破距离",
+            "weekly_platform_high" => "周线平台上沿",
+            "weekly_platform_low" => "周线平台下沿",
+            "weekly_platform_range_percent" => "周线平台振幅",
+            "weekly_recent_range_percent" => "近期周线振幅",
+            "weekly_resistance_touch_count" => "周线压力触碰",
+            "thirty_minute_breakout_price" => "30分钟突破价",
+            "thirty_minute_volume_ratio" => "30分钟量比",
+            "thirty_minute_close_position_percent" => "30分钟收盘位置",
+            "thirty_minute_upper_shadow_percent" => "30分钟上影",
+            "thirty_minute_confirmed" => "30分钟确认",
             "average_volume_20" => "20日均量",
             "above_latest_close_percent" => "较昨收",
             "above_ma20_percent" => "较MA20",
@@ -3925,6 +4561,43 @@ public partial class MainWindow : Window
         public static LongTermTrackingTagDisplay Info(string text) =>
             new(text, new SolidColorBrush(Color.FromRgb(47, 112, 220)), new SolidColorBrush(Color.FromRgb(232, 241, 255)));
     }
+
+    private sealed record StrategyReturnSummaryDisplay(
+        string StrategyName,
+        string StrategyVersionText,
+        string HorizonText,
+        string SignalCountText,
+        string WinRateText,
+        string AverageReturnText,
+        Brush AverageReturnBrush,
+        string RangeText,
+        string LastSignalTimeText);
+
+    private sealed record StrategyReturnRecordDisplay(
+        Guid EventId,
+        string StockText,
+        string StrategyName,
+        string StrategyVersionText,
+        string EventTimeText,
+        string EntryPriceText,
+        string ReturnText,
+        Brush ReturnBrush,
+        string RangeText,
+        string StatusText);
+
+    private sealed record StrategyVersionDisplay(
+        string StrategyName,
+        string Version,
+        string Status,
+        Brush StatusBrush,
+        Brush StatusBackground,
+        string TimeText,
+        string RuleSummary);
+
+    private sealed record StrategyReviewHeatDisplay(
+        string Name,
+        string HeatText,
+        string BreadthText);
 
     private sealed record BacktestSignalDisplay(
         string TradingDate,

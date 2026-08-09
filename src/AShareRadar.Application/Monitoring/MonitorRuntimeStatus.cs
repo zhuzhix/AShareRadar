@@ -13,4 +13,10 @@ public sealed record MonitorRuntimeStatus(
     DateTimeOffset? LastHistoricalStrategyScanTime = null,
     DateTimeOffset? NextHistoricalStrategyScanTime = null,
     int HistoricalStrategyScanSymbolCount = 0,
-    int HistoricalStrategyScanSignalCount = 0);
+    int HistoricalStrategyScanSignalCount = 0,
+    string RealtimePoolStatus = "NotStarted",
+    string ObservationPoolStatus = "NotStarted",
+    int RealtimePoolSignalCount = 0,
+    int ObservationPoolSignalCount = 0,
+    int PlatformBreakoutAlertCount = 0,
+    int PlatformBreakoutConfirmedCount = 0);

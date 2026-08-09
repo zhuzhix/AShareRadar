@@ -4,7 +4,6 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:controls="clr-namespace:AShareRadar.Desktop.Controls"
-        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
         Title="A股机会雷达" Height="860" Width="1480"
         Icon="Assets/app-icon.ico"
@@ -751,6 +750,7 @@
                                         <Button x:Name="StockPoolsViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="每日命中" Visibility="Collapsed" Click="StockPoolsViewButton_Click" />
                                         <Button x:Name="HistoryStatsViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="历史统计" Visibility="Collapsed" Click="HistoryStatsViewButton_Click" />
                                         <Button x:Name="PredictionReviewViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="次日预测" Visibility="Collapsed" Click="PredictionReviewViewButton_Click" />
+                                        <Button x:Name="StrategyReviewViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="策略复盘" Visibility="Collapsed" Click="StrategyReviewViewButton_Click" />
                                         <Button x:Name="StrategyCenterViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="策略中心" Visibility="Collapsed" Click="StrategyCenterViewButton_Click" />
                                         <Button x:Name="LongTermTrackingViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="长期跟踪" Visibility="Collapsed" Click="LongTermTrackingViewButton_Click" />
                                         <Button x:Name="BacktestViewButton" Width="108" Height="42" Margin="0" Padding="0" Content="策略回放" Visibility="Collapsed" Click="BacktestViewButton_Click" />
@@ -1421,6 +1421,251 @@
                                         </ListBox>
                                     </StackPanel>
                                 </ScrollViewer>
+
+                                <Grid x:Name="StrategyReviewPanel" Grid.Row="1" Margin="0,10,0,0" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+
+                                    <Border Grid.Row="0" Style="{StaticResource ReviewFilterBarStyle}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="策略复盘中心" FontSize="18" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="StrategyReviewSummaryText" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" Text="集中查看收益统计、命中明细、热度快照和策略版本。" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <StackPanel Margin="0,0,10,0">
+                                                    <TextBlock Text="开始" Style="{StaticResource CaptionStyle}" />
+                                                    <controls:RadarDatePicker x:Name="StrategyReviewFromDatePicker" Width="128" Height="30" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,0">
+                                                    <TextBlock Text="结束" Style="{StaticResource CaptionStyle}" />
+                                                    <controls:RadarDatePicker x:Name="StrategyReviewToDatePicker" Width="128" Height="30" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,0">
+                                                    <TextBlock Text="策略" Style="{StaticResource CaptionStyle}" />
+                                                    <TextBox x:Name="StrategyReviewStrategyCodeTextBox" Width="160" Height="30" Margin="0,4,0,0" Style="{StaticResource SearchTextBoxStyle}" ToolTip="策略代码，留空查询全部" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,0">
+                                                    <TextBlock Text="版本" Style="{StaticResource CaptionStyle}" />
+                                                    <TextBox x:Name="StrategyReviewVersionTextBox" Width="190" Height="30" Margin="0,4,0,0" Style="{StaticResource SearchTextBoxStyle}" ToolTip="策略版本，留空查询全部" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,10,0">
+                                                    <TextBlock Text="周期" Style="{StaticResource CaptionStyle}" />
+                                                    <ComboBox x:Name="StrategyReviewHorizonComboBox" Width="94" Height="30" Margin="0,4,0,0" SelectedIndex="0" Style="{StaticResource RadarComboBoxStyle}">
+                                                        <ComboBoxItem Content="全部" Tag="" />
+                                                        <ComboBoxItem Content="D1" Tag="D1" />
+                                                        <ComboBoxItem Content="D3" Tag="D3" />
+                                                        <ComboBoxItem Content="D5" Tag="D5" />
+                                                        <ComboBoxItem Content="W1" Tag="W1" />
+                                                        <ComboBoxItem Content="M1" Tag="M1" />
+                                                        <ComboBoxItem Content="M3" Tag="M3" />
+                                                    </ComboBox>
+                                                </StackPanel>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                                                    <Button x:Name="RefreshStrategyReviewButton" Width="72" Height="30" Padding="8,0" Content="查询" Style="{StaticResource PrimaryButtonStyle}" Click="RefreshStrategyReviewButton_Click" />
+                                                    <Button x:Name="RecalculateStrategyReviewButton" Width="78" Height="30" Padding="8,0" Content="重算" Click="RecalculateStrategyReviewButton_Click" />
+                                                </StackPanel>
+                                            </WrapPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <UniformGrid Grid.Row="1" Columns="5" Margin="0,16,0,0">
+                                        <Border Style="{StaticResource ReviewCardStyle}" Margin="0,0,12,0">
+                                            <StackPanel>
+                                                <TextBlock Text="样本数" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="StrategyReviewSignalMetricText" Margin="0,8,0,0" Text="0" Foreground="{DynamicResource PrimaryBrush}" FontSize="28" FontWeight="SemiBold" />
+                                                <TextBlock Text="命中记录" Foreground="{DynamicResource MutedTextBrush}" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Style="{StaticResource ReviewCardStyle}" Margin="0,0,12,0">
+                                            <StackPanel>
+                                                <TextBlock Text="已完成" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="StrategyReviewCompletedMetricText" Margin="0,8,0,0" Text="0" Foreground="{DynamicResource AccentBlueBrush}" FontSize="28" FontWeight="SemiBold" />
+                                                <TextBlock Text="可统计样本" Foreground="{DynamicResource MutedTextBrush}" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Style="{StaticResource ReviewCardStyle}" Margin="0,0,12,0">
+                                            <StackPanel>
+                                                <TextBlock Text="胜率" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="StrategyReviewWinRateMetricText" Margin="0,8,0,0" Text="--" Foreground="{DynamicResource SuccessBrush}" FontSize="28" FontWeight="SemiBold" />
+                                                <TextBlock Text="按已完成样本" Foreground="{DynamicResource MutedTextBrush}" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Style="{StaticResource ReviewCardStyle}" Margin="0,0,12,0">
+                                            <StackPanel>
+                                                <TextBlock Text="平均收益" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="StrategyReviewAverageMetricText" Margin="0,8,0,0" Text="--" Foreground="{DynamicResource DangerBrush}" FontSize="28" FontWeight="SemiBold" />
+                                                <TextBlock Text="目标窗口" Foreground="{DynamicResource MutedTextBrush}" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Style="{StaticResource ReviewCardStyle}">
+                                            <StackPanel>
+                                                <TextBlock Text="策略版本" Foreground="{DynamicResource MutedTextBrush}" FontWeight="SemiBold" />
+                                                <TextBlock x:Name="StrategyReviewVersionMetricText" Margin="0,8,0,0" Text="0" Foreground="{DynamicResource WarningBrush}" FontSize="28" FontWeight="SemiBold" />
+                                                <TextBlock Text="已登记版本" Foreground="{DynamicResource MutedTextBrush}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </UniformGrid>
+
+                                    <Grid Grid.Row="2" Margin="0,16,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="3*" />
+                                            <ColumnDefinition Width="16" />
+                                            <ColumnDefinition Width="2*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="16" />
+                                            <RowDefinition Height="260" />
+                                        </Grid.RowDefinitions>
+
+                                        <Border Grid.Row="0" Grid.Column="0" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1" CornerRadius="12" Padding="0">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+                                                <TextBlock Margin="18,14,18,10" Text="收益统计" FontWeight="SemiBold" />
+                                                <DataGrid x:Name="StrategyReturnSummaryDataGrid" Grid.Row="1" Style="{StaticResource ReviewDataGridStyle}" RowHeight="46">
+                                                    <DataGrid.Columns>
+                                                        <DataGridTextColumn Header="策略" Binding="{Binding StrategyName}" Width="2*" MinWidth="160" />
+                                                        <DataGridTextColumn Header="版本" Binding="{Binding StrategyVersionText}" Width="2*" MinWidth="150" />
+                                                        <DataGridTextColumn Header="周期" Binding="{Binding HorizonText}" Width="*" MinWidth="70" />
+                                                        <DataGridTextColumn Header="命中" Binding="{Binding SignalCountText}" Width="*" MinWidth="70" />
+                                                        <DataGridTextColumn Header="胜率" Binding="{Binding WinRateText}" Width="*" MinWidth="80" />
+                                                        <DataGridTemplateColumn Header="平均收益" Width="*" MinWidth="90">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding AverageReturnText}" Foreground="{Binding AverageReturnBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                        </DataGridTemplateColumn>
+                                                        <DataGridTemplateColumn Header="最好/最差" Width="2*" MinWidth="150">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding RangeText}" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                        </DataGridTemplateColumn>
+                                                        <DataGridTextColumn Header="最近命中" Binding="{Binding LastSignalTimeText}" Width="*" MinWidth="110" />
+                                                    </DataGrid.Columns>
+                                                </DataGrid>
+                                            </Grid>
+                                        </Border>
+
+                                        <Border Grid.Row="0" Grid.Column="2" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1" CornerRadius="12" Padding="0">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+                                                <TextBlock Margin="18,14,18,10" Text="策略版本" FontWeight="SemiBold" />
+                                                <ListBox x:Name="StrategyVersionListBox" Grid.Row="1" Margin="14,0,14,14" ItemContainerStyle="{StaticResource FlatListBoxItemStyle}">
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Style="{StaticResource ReviewAccordionCardStyle}">
+                                                                <StackPanel>
+                                                                    <DockPanel>
+                                                                        <Border DockPanel.Dock="Right" Padding="8,3" Background="{Binding StatusBackground}" CornerRadius="10">
+                                                                            <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontSize="12" FontWeight="SemiBold" />
+                                                                        </Border>
+                                                                        <TextBlock Text="{Binding StrategyName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                    </DockPanel>
+                                                                    <TextBlock Margin="0,5,0,0" Text="{Binding Version}" Foreground="{DynamicResource PrimaryBrush}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                                    <TextBlock Margin="0,5,0,0" Text="{Binding TimeText}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" />
+                                                                    <TextBlock Margin="0,5,0,0" Text="{Binding RuleSummary}" Foreground="{DynamicResource SubtleTextBrush}" FontSize="12" TextWrapping="Wrap" MaxHeight="54" />
+                                                                </StackPanel>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+                                            </Grid>
+                                        </Border>
+
+                                        <Border Grid.Row="2" Grid.Column="0" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1" CornerRadius="12" Padding="0">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+                                                <TextBlock Margin="18,14,18,10" Text="命中明细" FontWeight="SemiBold" />
+                                                <DataGrid x:Name="StrategyReturnRecordDataGrid" Grid.Row="1" Style="{StaticResource ReviewDataGridStyle}" RowHeight="46" SelectionChanged="StrategyReturnRecordDataGrid_SelectionChanged">
+                                                    <DataGrid.Columns>
+                                                        <DataGridTextColumn Header="股票" Binding="{Binding StockText}" Width="2*" MinWidth="140" />
+                                                        <DataGridTextColumn Header="策略" Binding="{Binding StrategyName}" Width="2*" MinWidth="160" />
+                                                        <DataGridTextColumn Header="版本" Binding="{Binding StrategyVersionText}" Width="2*" MinWidth="140" />
+                                                        <DataGridTextColumn Header="命中" Binding="{Binding EventTimeText}" Width="*" MinWidth="118" />
+                                                        <DataGridTextColumn Header="入场" Binding="{Binding EntryPriceText}" Width="*" MinWidth="76" />
+                                                        <DataGridTemplateColumn Header="收益" Width="*" MinWidth="82">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding ReturnText}" Foreground="{Binding ReturnBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                        </DataGridTemplateColumn>
+                                                        <DataGridTextColumn Header="区间" Binding="{Binding RangeText}" Width="2*" MinWidth="150" />
+                                                        <DataGridTextColumn Header="状态" Binding="{Binding StatusText}" Width="*" MinWidth="78" />
+                                                    </DataGrid.Columns>
+                                                </DataGrid>
+                                            </Grid>
+                                        </Border>
+
+                                        <Border Grid.Row="2" Grid.Column="2" Background="{DynamicResource CardBrush}" BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1" CornerRadius="12" Padding="18">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="14" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Text="热度快照" FontWeight="SemiBold" />
+                                                    <TextBlock x:Name="StrategyReviewHeatSummaryText" Margin="0,6,0,0" Text="等待加载最新热度快照" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" />
+                                                    <ItemsControl x:Name="StrategyReviewSectorHeatItemsControl" Margin="0,10,0,0">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Border Margin="0,0,0,8" Padding="10,8" Background="{DynamicResource CardDarkBrush}" BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1" CornerRadius="8">
+                                                                    <StackPanel>
+                                                                        <DockPanel>
+                                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding HeatText}" Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold" />
+                                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                        </DockPanel>
+                                                                        <TextBlock Margin="0,4,0,0" Text="{Binding BreadthText}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" />
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="2">
+                                                    <TextBlock Text="命中证据" FontWeight="SemiBold" />
+                                                    <TextBlock x:Name="StrategyReviewSelectedSignalText" Margin="0,6,0,0" Text="选择一条命中明细后显示热度上下文和版本绑定。" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" />
+                                                    <ItemsControl x:Name="StrategyReviewSignalEvidenceItemsControl" Margin="0,10,0,0">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Border Margin="0,0,0,8" Padding="10,8" Background="{DynamicResource CardDarkBrush}" BorderBrush="{DynamicResource BorderBrushSoft}" BorderThickness="1" CornerRadius="8">
+                                                                    <StackPanel>
+                                                                        <DockPanel>
+                                                                            <TextBlock DockPanel.Dock="Right" Text="{Binding HeatText}" Foreground="{DynamicResource PrimaryBrush}" FontWeight="SemiBold" />
+                                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                        </DockPanel>
+                                                                        <TextBlock Margin="0,4,0,0" Text="{Binding BreadthText}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" />
+                                                                    </StackPanel>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
+                                </Grid>
 
                                 <ScrollViewer x:Name="BacktestPanel" Grid.Row="1" Margin="0,10,0,0" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                                     <StackPanel HorizontalAlignment="Stretch" Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
@@ -2193,9 +2438,6 @@
                                     <TextBlock x:Name="MappingPageSummaryText" Margin="0,5,0,0" Foreground="{DynamicResource MutedTextBrush}" Text="行业映射 -- | 概念映射 -- | 尚无更新时间" />
                                     <TextBlock x:Name="MappingPageErrorText" Margin="0,5,0,0" Foreground="{DynamicResource DangerBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
                                 </StackPanel>
-                                <Border Grid.Row="1" Visibility="Collapsed">
-                                    <wv2:WebView2 x:Name="MappingWebView" Width="1" Height="1" IsHitTestVisible="False" />
-                                </Border>
                                 <GridSplitter Grid.Row="2"
                                               Height="6"
                                               Visibility="Collapsed"

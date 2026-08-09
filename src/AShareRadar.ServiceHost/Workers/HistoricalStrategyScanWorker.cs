@@ -1,19 +1,25 @@
+using AShareRadar.Application.MarketData;
+using AShareRadar.Domain.Monitoring;
+
 namespace AShareRadar.ServiceHost.Workers;
 
 public sealed class HistoricalStrategyScanWorker : BackgroundService
 {
     private readonly HistoricalStrategyScanOptions _options;
     private readonly HistoricalStrategyScanService _scanService;
+    private readonly TradingSessionService _tradingSessionService;
     private readonly ILogger<HistoricalStrategyScanWorker> _logger;
     private DateTimeOffset? _lastRunAt;
 
     public HistoricalStrategyScanWorker(
         HistoricalStrategyScanOptions options,
         HistoricalStrategyScanService scanService,
+        TradingSessionService tradingSessionService,
         ILogger<HistoricalStrategyScanWorker> logger)
     {
         _options = options;
         _scanService = scanService;
+        _tradingSessionService = tradingSessionService;
         _logger = logger;
     }
 
@@ -55,6 +61,11 @@ public sealed class HistoricalStrategyScanWorker : BackgroundService
     private bool ShouldRun()
     {
         var now = DateTimeOffset.Now;
+        if (_tradingSessionService.GetMarketStatus(now) == MarketStatus.NonTradingDay)
+        {
+            return false;
+        }
+
         if (_lastRunAt is null)
         {
             if (_options.RunOnStartup)

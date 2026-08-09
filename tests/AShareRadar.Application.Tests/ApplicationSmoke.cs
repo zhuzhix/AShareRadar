@@ -120,7 +120,8 @@ internal static class ApplicationSmoke
             new FakeMarketSentimentStore(),
             new FakeExternalDataProvider(),
             new TradingCalendarService(new TradingCalendarOptions()),
-            limitPoolProvider);
+            limitPoolProvider,
+            new FakeMarketUniverseProvider());
     }
 
     private static void AssertMetric(MarketSentimentSnapshot sentiment, string code, decimal expectedValue, string expectedSource)
@@ -235,6 +236,15 @@ internal static class ApplicationSmoke
         }
     }
 
+    private sealed class FakeMarketUniverseProvider : IMarketUniverseProvider
+    {
+        public Task<MarketUniverseSnapshot?> LoadUniverseAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult<MarketUniverseSnapshot?>(
+                new MarketUniverseSnapshot(DateTimeOffset.Now, "FakeUniverse", 4));
+        }
+    }
+
     private static void AssertTradingSessionSchedule()
     {
         var service = new TradingSessionService(
@@ -249,6 +259,7 @@ internal static class ApplicationSmoke
         AssertMarketStatus(service, new DateTimeOffset(2026, 8, 5, 14, 0, 0, offset), MarketStatus.Trading);
         AssertMarketStatus(service, new DateTimeOffset(2026, 8, 5, 15, 0, 0, offset), MarketStatus.Closed);
         AssertMarketStatus(service, new DateTimeOffset(2026, 8, 8, 10, 0, 0, offset), MarketStatus.NonTradingDay);
+        AssertMarketStatus(service, new DateTimeOffset(2026, 8, 9, 10, 0, 0, offset), MarketStatus.NonTradingDay);
 
         var readyTime = new TimeOnly(15, 15);
         var beforeReady = service.GetLatestCompletedTradingDate(

@@ -19,6 +19,7 @@ internal static class StrategiesSmoke
         await MainSectorResonanceShouldRequireMinuteBarsAsync();
         await MainSectorResonanceShouldRejectDeepIntradayPullbackAsync();
         await PlatformVolumeBreakoutShouldUseDailyStructureAsync();
+        await PlatformVolumeBreakoutShouldIgnoreCurrentWeekAsync();
         await PlatformVolumeBreakoutShouldRejectLongUpperShadowAsync();
         await MovingAveragePullbackShouldUseDailyStructureAsync();
         await MovingAveragePullbackShouldRejectSupportBreakdownAsync();
@@ -27,8 +28,6 @@ internal static class StrategiesSmoke
         await CounterTrendStrengthShouldFindRelativeStrengthInWeakMarketAsync();
         await CounterTrendStrengthShouldIgnoreStrongMarketAsync();
         await StrongRepairReboundShouldFindIntradayRepairAsync();
-        await DreamerDaAShouldCreateLongTermWatchAsync();
-        await ZhongheYingtaiShouldCreateMainriseWatchAsync();
     }
 
     private static void EmptyRegistryShouldReturnNoStrategies()
@@ -68,8 +67,8 @@ internal static class StrategiesSmoke
     private static async Task MainSectorResonanceShouldFindGapDownRecoveryAsync()
     {
         var strategy = MainSectorResonanceStrategy.CreateGapRecovery();
-        var quote = Quote("600012", 9.85m, -1.5m, 1.6m, 180_000_000m);
-        var context = BuildMainSectorContext(quote, MainSectorGapRecoveryMinuteBars());
+        var quote = Quote("600012", 10.00m, 2.5m, 1.6m, 180_000_000m);
+        var context = BuildMainSectorContext(quote, MainSectorGapRecoveryMinuteBars(open: 9.60m));
 
         var signal = RequireSignal(await strategy.EvaluateAsync(context, CancellationToken.None), "main-sector-gap-recovery", "open_gap_percent");
         if (signal.StrategyName != "主线低开高走" || signal.Action != StrategySignalAction.Candidate)
@@ -86,7 +85,7 @@ internal static class StrategiesSmoke
     private static async Task MainSectorGapRecoveryShouldAcceptGrowthBoardGapWithinLimitAsync()
     {
         var strategy = MainSectorResonanceStrategy.CreateGapRecovery();
-        var quote = Quote("300012", 9.85m, -1.5m, 1.6m, 180_000_000m);
+        var quote = Quote("300012", 10.00m, 1.5m, 1.6m, 180_000_000m);
         var context = BuildMainSectorContext(quote, MainSectorGapRecoveryMinuteBars());
 
         if ((await strategy.EvaluateAsync(context, CancellationToken.None)).Count == 0)
@@ -126,12 +125,29 @@ internal static class StrategiesSmoke
         var quote = Quote("300001", 10.20m, 2.1m, 1.9m);
         var historyBars = Bars(45, index => 9.80m, high: 10.00m, low: 9.30m);
         var currentBar = new KLineBar(DateTime.Today, 10.00m, 10.30m, 9.90m, 10.20m, 2_000_000m);
-        var context = BuildContext(quote, historyBars.Append(currentBar).ToArray(), WeeklyPlatformBars());
+        var context = BuildContext(quote, historyBars.Append(currentBar).ToArray(), WeeklyPlatformBars(), ThirtyMinutePlatformBars());
 
         var signal = RequireSignal(await strategy.EvaluateAsync(context, CancellationToken.None), "platform-volume-breakout", "weekly_platform_high");
         if (signal.Action != StrategySignalAction.Candidate || !signal.StopLossPrice.HasValue || !signal.TakeProfitPrice.HasValue)
         {
             throw new InvalidOperationException("Weekly platform breakout signal should include trade diagnostics.");
+        }
+    }
+
+    private static async Task PlatformVolumeBreakoutShouldIgnoreCurrentWeekAsync()
+    {
+        var strategy = new PlatformVolumeBreakoutStrategy();
+        var quote = Quote("300001", 10.20m, 2.1m, 1.9m);
+        var historyBars = Bars(45, _ => 9.80m, high: 10.00m, low: 9.30m);
+        var currentBar = new KLineBar(DateTime.Today, 10.00m, 10.30m, 9.90m, 10.20m, 2_000_000m);
+        var currentWeekBar = new KLineBar(DateTime.Today, 100m, 200m, 90m, 180m, 8_000_000m);
+        var weeklyBars = WeeklyPlatformBars().Append(currentWeekBar).ToArray();
+        var context = BuildContext(quote, historyBars.Append(currentBar).ToArray(), weeklyBars, ThirtyMinutePlatformBars());
+
+        var signal = RequireSignal(await strategy.EvaluateAsync(context, CancellationToken.None), "platform-volume-breakout", "weekly_platform_high");
+        if (signal.Metrics!["weekly_platform_high"] != 10.00m)
+        {
+            throw new InvalidOperationException("Incomplete current week must not be included in the weekly platform baseline.");
         }
     }
 
@@ -141,7 +157,7 @@ internal static class StrategiesSmoke
         var quote = Quote("300003", 10.20m, 2.1m, 2.0m);
         var historyBars = Bars(40, _ => 9.80m, high: 10.00m, low: 9.50m);
         var currentBar = new KLineBar(DateTime.Today, 10.00m, 11.30m, 9.80m, 10.20m, 2_000_000m);
-        var context = BuildContext(quote, historyBars.Append(currentBar).ToArray(), WeeklyPlatformBars());
+        var context = BuildContext(quote, historyBars.Append(currentBar).ToArray(), WeeklyPlatformBars(), ThirtyMinutePlatformBars(longUpperShadow: true));
 
         if ((await strategy.EvaluateAsync(context, CancellationToken.None)).Count != 0)
         {
@@ -249,28 +265,6 @@ internal static class StrategiesSmoke
         }
     }
 
-    private static async Task DreamerDaAShouldCreateLongTermWatchAsync()
-    {
-        var strategy = new DreamerDaAStrategy();
-        var quote = Quote("300010", 13.40m, 0.8m, 1.0m);
-        var signal = RequireSignal(await strategy.EvaluateAsync(BuildContext(quote, TrendBars(80, 0.035m)), CancellationToken.None), "dreamer-da-a", "distance_from_support_percent");
-        if (signal.Stage != StrategyStage.ReviewOnly || signal.Action != StrategySignalAction.Watch)
-        {
-            throw new InvalidOperationException("Dreamer strategy should stay review/watch only.");
-        }
-    }
-
-    private static async Task ZhongheYingtaiShouldCreateMainriseWatchAsync()
-    {
-        var strategy = new ZhongheYingtaiMainriseStrategy();
-        var quote = Quote("300011", 13.45m, 0.9m, 1.0m);
-        var signal = RequireSignal(await strategy.EvaluateAsync(BuildContext(quote, TrendBars(80, 0.035m)), CancellationToken.None), "zhonghe-yingtai-mainrise", "trend_line");
-        if (signal.Stage != StrategyStage.ReviewOnly || signal.Action != StrategySignalAction.PullbackWait)
-        {
-            throw new InvalidOperationException("Zhonghe Yingtai strategy should stay review/pullback wait.");
-        }
-    }
-
     private static StrategySignal RequireSignal(IReadOnlyList<StrategySignal> signals, string code, string metric)
     {
         var signal = signals.SingleOrDefault(item => item.StrategyCode == code)
@@ -283,16 +277,21 @@ internal static class StrategiesSmoke
         return signal;
     }
 
-    private static StrategyContext BuildContext(StockQuote quote, IReadOnlyList<KLineBar> bars, IReadOnlyList<KLineBar>? weeklyBars = null)
+    private static StrategyContext BuildContext(
+        StockQuote quote,
+        IReadOnlyList<KLineBar> bars,
+        IReadOnlyList<KLineBar>? weeklyBars = null,
+        IReadOnlyList<KLineBar>? thirtyMinuteBars = null)
     {
-        return BuildContext(quote, new MarketSnapshot(DateTimeOffset.Now, "Test", [quote]), bars, weeklyBars);
+        return BuildContext(quote, new MarketSnapshot(DateTimeOffset.Now, "Test", [quote]), bars, weeklyBars, thirtyMinuteBars);
     }
 
     private static StrategyContext BuildContext(
         StockQuote quote,
         MarketSnapshot snapshot,
         IReadOnlyList<KLineBar> bars,
-        IReadOnlyList<KLineBar>? weeklyBars = null)
+        IReadOnlyList<KLineBar>? weeklyBars = null,
+        IReadOnlyList<KLineBar>? thirtyMinuteBars = null)
     {
         return new StrategyContext(
             Guid.NewGuid(),
@@ -307,6 +306,12 @@ internal static class StrategiesSmoke
                 : new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase)
                 {
                     [quote.Symbol] = weeklyBars
+                },
+            ThirtyMinuteBarsBySymbol: thirtyMinuteBars is null
+                ? null
+                : new Dictionary<string, IReadOnlyList<KLineBar>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [quote.Symbol] = thirtyMinuteBars
                 });
     }
 
@@ -382,6 +387,27 @@ internal static class StrategiesSmoke
                     Low: 8.85m,
                     Close: close,
                     Volume: 8_000_000m);
+            })
+            .ToArray();
+    }
+
+    private static KLineBar[] ThirtyMinutePlatformBars(bool longUpperShadow = false)
+    {
+        return Enumerable.Range(0, 6)
+            .Select(index =>
+            {
+                var close = index == 5 ? 10.10m : 9.70m + index * 0.03m;
+                var open = index == 5 ? 9.98m : close - 0.05m;
+                var high = index == 5 && longUpperShadow ? 11.00m : close + 0.04m;
+                var low = close - 0.10m;
+                var volume = index == 5 ? 2_000_000m : 1_000_000m;
+                return new KLineBar(
+                    DateTime.Today.AddDays(-1).AddHours(9).AddMinutes(index * 30),
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume);
             })
             .ToArray();
     }

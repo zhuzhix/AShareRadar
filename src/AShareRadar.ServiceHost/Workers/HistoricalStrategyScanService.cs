@@ -5,6 +5,8 @@ using AShareRadar.Application.Realtime;
 using AShareRadar.Application.Review;
 using AShareRadar.Application.Strategies;
 using AShareRadar.Domain.MarketData;
+using AShareRadar.Domain.Monitoring;
+using AShareRadar.Domain.Opportunities;
 
 namespace AShareRadar.ServiceHost.Workers;
 
@@ -19,6 +21,8 @@ public sealed class HistoricalStrategyScanService
     private readonly IRealtimeEventPublisher _realtimeEventPublisher;
     private readonly ILogger<HistoricalStrategyScanService> _logger;
     private readonly LongTermTrackingService _longTermTrackingService;
+    private readonly StrategyVersionService _strategyVersionService;
+    private readonly TradingSessionService _tradingSessionService;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public HistoricalStrategyScanService(
@@ -30,7 +34,9 @@ public sealed class HistoricalStrategyScanService
         MonitorRuntimeState runtimeState,
         IRealtimeEventPublisher realtimeEventPublisher,
         ILogger<HistoricalStrategyScanService> logger,
-        LongTermTrackingService longTermTrackingService)
+        LongTermTrackingService longTermTrackingService,
+        StrategyVersionService strategyVersionService,
+        TradingSessionService tradingSessionService)
     {
         _options = options;
         _symbolProvider = symbolProvider;
@@ -41,10 +47,18 @@ public sealed class HistoricalStrategyScanService
         _realtimeEventPublisher = realtimeEventPublisher;
         _logger = logger;
         _longTermTrackingService = longTermTrackingService;
+        _strategyVersionService = strategyVersionService;
+        _tradingSessionService = tradingSessionService;
     }
 
     public async Task<bool> TryRunScheduledAsync(CancellationToken cancellationToken)
     {
+        if (_tradingSessionService.GetMarketStatus(DateTimeOffset.Now) == MarketStatus.NonTradingDay)
+        {
+            _logger.LogInformation("Historical strategy scan skipped because today is not a trading day.");
+            return false;
+        }
+
         if (!_options.Enabled || !await _gate.WaitAsync(0, cancellationToken))
         {
             return false;
@@ -63,10 +77,16 @@ public sealed class HistoricalStrategyScanService
 
     private async Task RunCoreAsync(CancellationToken cancellationToken)
     {
+        var startedAt = DateTimeOffset.Now;
+        if (_tradingSessionService.GetMarketStatus(startedAt) == MarketStatus.NonTradingDay)
+        {
+            _logger.LogInformation("Historical strategy scan skipped inside service because today is not a trading day.");
+            return;
+        }
+
         _runtimeState.MarkHistoricalStrategyScanning();
         await _realtimeEventPublisher.PublishMonitorStatusChangedAsync(_runtimeState.GetStatus(), cancellationToken);
 
-        var startedAt = DateTimeOffset.Now;
         var nextScanTime = startedAt.AddMinutes(Math.Clamp(_options.RepeatIntervalMinutes, 30, 1440));
         try
         {
@@ -96,6 +116,9 @@ public sealed class HistoricalStrategyScanService
                 dailyBarsBySymbol.Values
                     .SelectMany(item => item)
                     .Max(item => item.TradingTime));
+            var signalEventTime = new DateTimeOffset(
+                tradingDate.ToDateTime(new TimeOnly(15, 0)),
+                startedAt.Offset);
             var snapshot = new MarketSnapshot(
                 startedAt,
                 "HistoricalDailyKLine",
@@ -123,8 +146,9 @@ public sealed class HistoricalStrategyScanService
             var signalEvents = _opportunityAppService.ApplyStrategySignals(
                 context.RunId,
                 context.TradingDate,
-                startedAt,
+                signalEventTime,
                 signals);
+            TrackStrategyVersions(signalEvents);
             _longTermTrackingService.TrackSignalEvents(signalEvents);
 
             foreach (var signalEvent in signalEvents)
@@ -153,6 +177,18 @@ public sealed class HistoricalStrategyScanService
             _runtimeState.MarkHistoricalStrategyScanFailed(nextScanTime);
             await _realtimeEventPublisher.PublishMonitorStatusChangedAsync(_runtimeState.GetStatus(), cancellationToken);
             _logger.LogError(ex, "Historical strategy scan failed.");
+        }
+    }
+
+    private void TrackStrategyVersions(IReadOnlyList<SignalEvent> signalEvents)
+    {
+        try
+        {
+            _strategyVersionService.TrackSignalEvents(signalEvents);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist historical signal strategy versions.");
         }
     }
 
@@ -272,6 +308,7 @@ public sealed class HistoricalStrategyScanService
         var requirement = strategy.Definition.DataRequirement;
         return requirement.RequiresDailyKLine
             && !requirement.RequiresMinuteKLine
+            && !requirement.RequiresThirtyMinuteKLine
             && !requirement.RequiresSectorData
             && !requirement.RequiresCapitalFlow;
     }

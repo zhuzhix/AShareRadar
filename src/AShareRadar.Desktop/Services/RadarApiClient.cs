@@ -1,5 +1,6 @@
 ﻿using System.Net.Http;
 using System.Net.Http.Json;
+using System.Net;
 using AShareRadar.Contracts.Backtesting;
 using AShareRadar.Contracts.History;
 using AShareRadar.Contracts.Jobs;
@@ -111,6 +112,24 @@ public sealed class RadarApiClient
     {
         return await _httpClient.GetFromJsonAsync<HeatBoardItemDto[]>(
             $"/api/market-data/concepts?count={count}",
+            cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<MappingBoardItemDto>> GetSectorMappingBoardsAsync(
+        int count,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<MappingBoardItemDto[]>(
+            $"/api/market-data/sector-mapping/boards?count={count}",
+            cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<MappingBoardItemDto>> GetConceptMappingBoardsAsync(
+        int count,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<MappingBoardItemDto[]>(
+            $"/api/market-data/concept-mapping/boards?count={count}",
             cancellationToken) ?? [];
     }
 
@@ -397,6 +416,127 @@ public sealed class RadarApiClient
             cancellationToken) ?? [];
     }
 
+    public async Task<IReadOnlyList<StrategyVersionDto>> GetStrategyVersionsAsync(
+        string? strategyCode,
+        CancellationToken cancellationToken)
+    {
+        var path = string.IsNullOrWhiteSpace(strategyCode)
+            ? "/api/strategies/versions"
+            : $"/api/strategies/{Uri.EscapeDataString(strategyCode.Trim())}/versions";
+        return await _httpClient.GetFromJsonAsync<StrategyVersionDto[]>(
+            path,
+            cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<SignalReturnStrategySummaryDto>> GetSignalReturnSummaryAsync(
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? strategyCode,
+        string? strategyVersion,
+        string? horizonCode,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var parameters = BuildSignalReturnParameters(
+            fromDate,
+            toDate,
+            symbol: null,
+            strategyCode,
+            strategyVersion,
+            horizonCode,
+            status: null,
+            count);
+        return await _httpClient.GetFromJsonAsync<SignalReturnStrategySummaryDto[]>(
+            $"/api/review/signal-returns/summary?{parameters}",
+            cancellationToken) ?? [];
+    }
+
+    public async Task<SignalReturnQueryResultDto?> GetSignalReturnRecordsAsync(
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? symbol,
+        string? strategyCode,
+        string? strategyVersion,
+        string? horizonCode,
+        string? status,
+        int count,
+        CancellationToken cancellationToken)
+    {
+        var parameters = BuildSignalReturnParameters(
+            fromDate,
+            toDate,
+            symbol,
+            strategyCode,
+            strategyVersion,
+            horizonCode,
+            status,
+            count);
+        return await _httpClient.GetFromJsonAsync<SignalReturnQueryResultDto>(
+            $"/api/review/signal-returns/records?{parameters}",
+            cancellationToken);
+    }
+
+    public async Task<SignalReturnRecalculateResultDto?> RecalculateSignalReturnsAsync(
+        SignalReturnRecalculateRequestDto request,
+        CancellationToken cancellationToken)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            "/api/review/signal-returns/recalculate",
+            request,
+            cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<SignalReturnRecalculateResultDto>(cancellationToken);
+    }
+
+    public async Task<HeatSnapshotOverviewDto?> GetLatestHeatSnapshotAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _httpClient.GetFromJsonAsync<HeatSnapshotOverviewDto>(
+                "/api/market-data/heat-snapshots/latest",
+                cancellationToken);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task<HeatSnapshotOverviewDto?> GetHeatSnapshotByTimeAsync(
+        DateTimeOffset snapshotTime,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _httpClient.GetFromJsonAsync<HeatSnapshotOverviewDto>(
+                $"/api/market-data/heat-snapshots/by-time?time={Uri.EscapeDataString(snapshotTime.ToString("O"))}",
+                cancellationToken);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<SignalHeatContextDto>> GetSignalHeatContextAsync(
+        Guid eventId,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<SignalHeatContextDto[]>(
+            $"/api/signals/events/{eventId}/heat-context",
+            cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<StrategyHitVersionDto>> GetSignalStrategyVersionsAsync(
+        Guid eventId,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient.GetFromJsonAsync<StrategyHitVersionDto[]>(
+            $"/api/signals/events/{eventId}/strategy-versions",
+            cancellationToken) ?? [];
+    }
+
     public async Task<BacktestReplayResultDto?> ReplayBacktestAsync(
         BacktestReplayRequest request,
         CancellationToken cancellationToken)
@@ -430,6 +570,59 @@ public sealed class RadarApiClient
         if (!string.IsNullOrWhiteSpace(strategyCode))
         {
             parts.Add($"strategyCode={Uri.EscapeDataString(strategyCode.Trim())}");
+        }
+
+        return string.Join("&", parts);
+    }
+
+    private static string BuildSignalReturnParameters(
+        DateOnly? fromDate,
+        DateOnly? toDate,
+        string? symbol,
+        string? strategyCode,
+        string? strategyVersion,
+        string? horizonCode,
+        string? status,
+        int count)
+    {
+        var parts = new List<string>
+        {
+            $"count={count}"
+        };
+
+        if (fromDate.HasValue)
+        {
+            parts.Add($"fromDate={Uri.EscapeDataString(fromDate.Value.ToString("yyyy-MM-dd"))}");
+        }
+
+        if (toDate.HasValue)
+        {
+            parts.Add($"toDate={Uri.EscapeDataString(toDate.Value.ToString("yyyy-MM-dd"))}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(symbol))
+        {
+            parts.Add($"symbol={Uri.EscapeDataString(symbol.Trim())}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(strategyCode))
+        {
+            parts.Add($"strategyCode={Uri.EscapeDataString(strategyCode.Trim())}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(strategyVersion))
+        {
+            parts.Add($"strategyVersion={Uri.EscapeDataString(strategyVersion.Trim())}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(horizonCode))
+        {
+            parts.Add($"horizonCode={Uri.EscapeDataString(horizonCode.Trim())}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            parts.Add($"status={Uri.EscapeDataString(status.Trim())}");
         }
 
         return string.Join("&", parts);

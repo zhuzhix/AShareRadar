@@ -6,4 +6,6 @@ public sealed record StrategyDataRequirement(
     bool RequiresMinuteKLine,
     bool RequiresSectorData,
     bool RequiresCapitalFlow,
-    int MinDailyBarCount);
+    int MinDailyBarCount,
+    bool RequiresWeeklyKLine = false,
+    bool RequiresThirtyMinuteKLine = false);

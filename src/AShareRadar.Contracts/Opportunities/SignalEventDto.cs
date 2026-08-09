@@ -13,4 +13,5 @@ public sealed record SignalEventDto(
     decimal? Price,
     string Reason,
     string? Risk,
-    IReadOnlyList<StrategyHitDto> StrategyHits);
+    IReadOnlyList<StrategyHitDto> StrategyHits,
+    IReadOnlyList<SignalHeatContextDto>? HeatContexts = null);

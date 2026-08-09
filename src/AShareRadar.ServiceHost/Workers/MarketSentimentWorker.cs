@@ -1,4 +1,5 @@
 using AShareRadar.Application.MarketData;
+using AShareRadar.Domain.Monitoring;
 
 namespace AShareRadar.ServiceHost.Workers;
 
@@ -7,20 +8,22 @@ public sealed class MarketSentimentWorker : BackgroundService
     private readonly MarketSentimentWorkerOptions _options;
     private readonly MarketSentimentService _marketSentimentService;
     private readonly ExternalSentimentSdkUpdateService _externalSentimentSdkUpdateService;
+    private readonly TradingSessionService _tradingSessionService;
     private readonly MarketSentimentRuntimeState _runtimeState;
     private readonly ILogger<MarketSentimentWorker> _logger;
-    private bool _startupRunCompleted;
 
     public MarketSentimentWorker(
         MarketSentimentWorkerOptions options,
         MarketSentimentService marketSentimentService,
         ExternalSentimentSdkUpdateService externalSentimentSdkUpdateService,
+        TradingSessionService tradingSessionService,
         MarketSentimentRuntimeState runtimeState,
         ILogger<MarketSentimentWorker> logger)
     {
         _options = options;
         _marketSentimentService = marketSentimentService;
         _externalSentimentSdkUpdateService = externalSentimentSdkUpdateService;
+        _tradingSessionService = tradingSessionService;
         _runtimeState = runtimeState;
         _logger = logger;
         _runtimeState.Configure(options.Enabled);
@@ -45,7 +48,6 @@ public sealed class MarketSentimentWorker : BackgroundService
                     _runtimeState.MarkRunning(startedAt);
                     await _externalSentimentSdkUpdateService.TryUpdateAsync(stoppingToken);
                     await _marketSentimentService.GetSnapshotAsync(stoppingToken);
-                    _startupRunCompleted = true;
                     _runtimeState.MarkSucceeded(DateTimeOffset.Now, DateTimeOffset.Now.Add(delay));
                 }
             }
@@ -65,26 +67,27 @@ public sealed class MarketSentimentWorker : BackgroundService
 
     private bool ShouldRun()
     {
-        if (_options.RunOnStartup && !_startupRunCompleted)
-        {
-            return true;
-        }
-
-        return IsActiveWindow();
+        return IsTradingDayActiveWindow();
     }
 
     private TimeSpan GetDelay()
     {
-        return IsActiveWindow()
+        return IsTradingDayActiveWindow()
             ? TimeSpan.FromSeconds(Math.Clamp(_options.ActiveIntervalSeconds, 20, 600))
             : TimeSpan.FromMinutes(Math.Clamp(_options.IdleIntervalMinutes, 5, 240));
+    }
+
+    private bool IsTradingDayActiveWindow()
+    {
+        return _tradingSessionService.GetMarketStatus(DateTimeOffset.Now) != MarketStatus.NonTradingDay
+            && IsActiveWindow();
     }
 
     private bool IsActiveWindow()
     {
         if (!TimeOnly.TryParse(_options.ActiveStartTime, out var start))
         {
-            start = new TimeOnly(9, 25);
+            start = new TimeOnly(9, 20);
         }
 
         if (!TimeOnly.TryParse(_options.ActiveEndTime, out var end))

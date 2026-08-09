@@ -1,5 +1,6 @@
 using AShareRadar.Application.MarketData;
 using AShareRadar.Domain.MarketData;
+using AShareRadar.Domain.Monitoring;
 
 namespace AShareRadar.ServiceHost.Workers;
 
@@ -8,18 +9,20 @@ public sealed class MinuteKLineCacheWorker : BackgroundService
     private readonly MinuteKLineCacheWorkerOptions _options;
     private readonly IMarketDataProvider _marketDataProvider;
     private readonly IKLineDataProvider _kLineDataProvider;
+    private readonly TradingSessionService _tradingSessionService;
     private readonly ILogger<MinuteKLineCacheWorker> _logger;
-    private bool _startupRunCompleted;
 
     public MinuteKLineCacheWorker(
         MinuteKLineCacheWorkerOptions options,
         IMarketDataProvider marketDataProvider,
         IKLineDataProvider kLineDataProvider,
+        TradingSessionService tradingSessionService,
         ILogger<MinuteKLineCacheWorker> logger)
     {
         _options = options;
         _marketDataProvider = marketDataProvider;
         _kLineDataProvider = kLineDataProvider;
+        _tradingSessionService = tradingSessionService;
         _logger = logger;
     }
 
@@ -39,7 +42,6 @@ public sealed class MinuteKLineCacheWorker : BackgroundService
                 if (ShouldRun())
                 {
                     await WarmCacheAsync(stoppingToken);
-                    _startupRunCompleted = true;
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -109,26 +111,27 @@ public sealed class MinuteKLineCacheWorker : BackgroundService
 
     private bool ShouldRun()
     {
-        if (_options.RunOnStartup && !_startupRunCompleted)
-        {
-            return true;
-        }
-
-        return IsActiveWindow();
+        return IsTradingDayActiveWindow();
     }
 
     private TimeSpan GetDelay()
     {
-        return IsActiveWindow()
+        return IsTradingDayActiveWindow()
             ? TimeSpan.FromSeconds(Math.Clamp(_options.ActiveIntervalSeconds, 20, 600))
             : TimeSpan.FromMinutes(Math.Clamp(_options.IdleIntervalMinutes, 5, 240));
+    }
+
+    private bool IsTradingDayActiveWindow()
+    {
+        return _tradingSessionService.GetMarketStatus(DateTimeOffset.Now) != MarketStatus.NonTradingDay
+            && IsActiveWindow();
     }
 
     private bool IsActiveWindow()
     {
         if (!TimeOnly.TryParse(_options.ActiveStartTime, out var start))
         {
-            start = new TimeOnly(9, 25);
+            start = new TimeOnly(9, 20);
         }
 
         if (!TimeOnly.TryParse(_options.ActiveEndTime, out var end))

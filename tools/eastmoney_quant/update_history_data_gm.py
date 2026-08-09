@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import os
 import shutil
 import sys
@@ -50,6 +52,10 @@ class Paths:
     @property
     def universe_path(self) -> Path:
         return self.parquet / "stock_universe.parquet"
+
+    @property
+    def stock_name_map_path(self) -> Path:
+        return self.parquet / "stock_name_map.parquet"
 
     @property
     def calendar_path(self) -> Path:
@@ -109,19 +115,45 @@ def daily_basic_output_path(paths: Paths, code: str) -> Path:
 def infer_board(code: str) -> str:
     value = code.lower()
     if value.startswith(("sh.688", "sh.689")):
-        return "科创板"
+        return "STAR"
     if value.startswith(("sz.300", "sz.301")):
-        return "创业板"
-    return "主板"
+        return "CHINEXT"
+    return "MAIN"
 
 
-def load_instruments(limit: int) -> pd.DataFrame:
+def is_valid_canonical_name(value: object) -> bool:
+    name = str(value or "").strip()
+    if not name or "\uFFFD" in name or "?" in name:
+        return False
+    if re.fullmatch(r"[0-9.]+", name):
+        return False
+    return any("\u4e00" <= char <= "\u9fff" for char in name)
+
+
+def load_name_map(path: Path) -> dict[str, str]:
+    if not path.exists():
+        raise FileNotFoundError(f"Canonical stock name map is required: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Canonical stock name map must be a JSON object.")
+    result: dict[str, str] = {}
+    for raw_code, raw_name in payload.items():
+        code = str(raw_code).strip()
+        if not re.fullmatch(r"\d{6}", code) or not is_valid_canonical_name(raw_name):
+            raise ValueError(f"Invalid canonical stock name entry: {raw_code!r}={raw_name!r}")
+        result[code] = str(raw_name).strip()
+    if len(result) < 1000:
+        raise ValueError(f"Canonical stock name map coverage is too low: {len(result)}")
+    return result
+
+
+def load_instruments(limit: int, name_map: dict[str, str]) -> pd.DataFrame:
     rows = get_instruments(
         exchanges=EXCHANGES,
         sec_types=SEC_TYPES,
         skip_suspended=False,
         skip_st=True,
-        fields="symbol,sec_name,exchange,listed_date,delisted_date",
+        fields="symbol,exchange,listed_date,delisted_date",
         df=False,
     ) or []
     items = []
@@ -135,14 +167,17 @@ def load_instruments(limit: int) -> pd.DataFrame:
         if delisted_date is not None and delisted_date <= today:
             continue
         code = to_duckdb_code(symbol)
+        code_suffix = code[3:]
+        if code_suffix not in name_map:
+            raise ValueError(f"Canonical stock name missing for supported instrument: {code}")
         items.append({
             "code": code,
-            "code_name": str(item.get("sec_name") or item.get("name") or code),
+            "code_name": name_map[code_suffix],
             "board": infer_board(code),
             "exchange": str(item.get("exchange", "")),
             "listed_date": item.get("listed_date"),
             "delisted_date": item.get("delisted_date"),
-            "source": "eastmoney-quant",
+            "source": "eastmoney-quant-dotnet-instrumentinfos",
         })
 
     frame = pd.DataFrame(items).drop_duplicates(subset=["code"], keep="last")
@@ -150,6 +185,14 @@ def load_instruments(limit: int) -> pd.DataFrame:
     if limit > 0:
         frame = frame.head(limit)
     return frame
+
+
+def write_stock_name_map(paths: Paths, name_map: dict[str, str]) -> None:
+    rows = []
+    for suffix, name in sorted(name_map.items()):
+        prefix = "sh." if suffix.startswith(("600", "601", "603", "605", "688", "689")) else "sz."
+        rows.append({"code": prefix + suffix, "code_name": name, "source": "eastmoney-quant-dotnet-instrumentinfos"})
+    pd.DataFrame(rows).to_parquet(paths.stock_name_map_path, index=False)
 
 
 def parse_optional_date(value) -> date | None:
@@ -172,15 +215,39 @@ def is_supported_ashare(symbol: str) -> bool:
     )
 
 
+def shared_daily_path(paths: Paths) -> Path:
+    return paths.root / "shared_data" / "parquet" / "daily_bars.parquet"
+
+
+def remove_duckdb_wal(path: Path) -> None:
+    wal_path = Path(str(path) + ".wal")
+    if wal_path.exists():
+        wal_path.unlink()
+
+
 def load_last_bar_date(paths: Paths) -> date | None:
-    if not paths.duckdb_path.exists():
-        return None
-    conn = duckdb.connect(str(paths.duckdb_path), read_only=True)
-    try:
-        value = conn.execute("SELECT max(date) FROM daily_bars").fetchone()[0]
-        return pd.to_datetime(value).date() if value is not None else None
-    finally:
-        conn.close()
+    if paths.duckdb_path.exists():
+        conn = duckdb.connect(str(paths.duckdb_path), read_only=True)
+        try:
+            table_exists = conn.execute(
+                "SELECT count(*) FROM information_schema.tables WHERE table_name = 'daily_bars'"
+            ).fetchone()[0]
+            if table_exists:
+                value = conn.execute("SELECT max(date) FROM daily_bars").fetchone()[0]
+                return pd.to_datetime(value).date() if value is not None else None
+        finally:
+            conn.close()
+
+    shared_path = shared_daily_path(paths)
+    if shared_path.exists():
+        conn = duckdb.connect(":memory:")
+        try:
+            value = conn.execute("SELECT max(trade_date) FROM read_parquet(?)", [str(shared_path)]).fetchone()[0]
+            return pd.to_datetime(value).date() if value is not None else None
+        finally:
+            conn.close()
+
+    return None
 
 
 def load_last_weekly_bar_date(paths: Paths) -> date | None:
@@ -231,9 +298,11 @@ def normalize_daily(rows: list[dict], code_name: str, board: str) -> pd.DataFram
             "high",
             "low",
             "close",
-            "preclose",
             "volume",
             "amount",
+            "preclose",
+            "code_name",
+            "board",
             "adjustflag",
             "turn",
             "tradestatus",
@@ -243,8 +312,6 @@ def normalize_daily(rows: list[dict], code_name: str, board: str) -> pd.DataFram
             "psTTM",
             "pcfNcfTTM",
             "isST",
-            "board",
-            "code_name",
         ]
     ]
 
@@ -326,15 +393,88 @@ def merge_daily_basic_file(paths: Paths, incoming: pd.DataFrame, code: str) -> i
 
 
 def rebuild_duckdb(paths: Paths) -> None:
+    remove_duckdb_wal(paths.temp_duckdb_path)
     if paths.temp_duckdb_path.exists():
         paths.temp_duckdb_path.unlink()
     conn = duckdb.connect(str(paths.temp_duckdb_path))
     try:
         conn.execute("CREATE OR REPLACE TABLE stock_universe AS SELECT * FROM read_parquet(?)", [str(paths.universe_path)])
+        if not paths.stock_name_map_path.exists():
+            raise FileNotFoundError(f"Canonical stock name parquet is required: {paths.stock_name_map_path}")
+        conn.execute("CREATE OR REPLACE TEMP TABLE stock_name_map AS SELECT * FROM read_parquet(?)", [str(paths.stock_name_map_path)])
         if paths.calendar_path.exists():
             conn.execute("CREATE OR REPLACE TABLE trade_calendar AS SELECT * FROM read_parquet(?)", [str(paths.calendar_path)])
-        pattern = str(paths.daily_dir / "*.parquet")
-        conn.execute("CREATE OR REPLACE TABLE daily_bars AS SELECT * FROM read_parquet(?)", [pattern])
+        daily_sources = []
+        shared_path = shared_daily_path(paths)
+        if shared_path.exists():
+            conn.execute("""
+                CREATE OR REPLACE TEMP TABLE shared_daily_bars AS
+                WITH source AS (
+                    SELECT trade_date AS date,
+                           lower(substr(symbol, 8, 2)) || '.' || substr(symbol, 1, 6) AS code,
+                           open, high, low, close, volume, amount,
+                           lag(close) OVER (PARTITION BY symbol ORDER BY trade_date) AS preclose,
+                           CASE WHEN symbol LIKE '688%' OR symbol LIKE '689%' THEN 'STAR'
+                                WHEN symbol LIKE '300%' OR symbol LIKE '301%' THEN 'CHINEXT'
+                                ELSE 'MAIN' END AS board,
+                           '2' AS adjustflag,
+                           0.0 AS turn,
+                           CASE WHEN paused THEN 0 ELSE 1 END AS tradestatus
+                    FROM read_parquet(?)
+                )
+                SELECT source.date, source.code, source.open, source.high, source.low, source.close,
+                       source.volume, source.amount, source.preclose, names.code_name, source.board,
+                       source.adjustflag, source.turn, source.tradestatus,
+                       CASE WHEN source.preclose IS NOT NULL AND source.preclose > 0
+                            THEN ((source.close / source.preclose) - 1.0) * 100.0 ELSE 0.0 END AS pctChg,
+                       0.0 AS peTTM, 0.0 AS pbMRQ, 0.0 AS psTTM, 0.0 AS pcfNcfTTM, 0 AS isST
+                FROM source INNER JOIN stock_name_map names ON names.code = source.code
+            """, [str(shared_path)])
+            daily_sources.append("""
+                SELECT date, code, open, high, low, close, volume, amount, preclose, code_name,
+                       board, adjustflag, turn, tradestatus, pctChg, peTTM, pbMRQ, psTTM,
+                       pcfNcfTTM, isST, 0 AS source_priority
+                FROM shared_daily_bars
+            """)
+
+        daily_files = list(paths.daily_dir.glob("*.parquet")) if paths.daily_dir.exists() else []
+        if daily_files:
+            pattern = str(paths.daily_dir / "*.parquet")
+            conn.execute("""
+                CREATE OR REPLACE TEMP TABLE incremental_daily_bars AS
+                SELECT d.date, d.code, d.open, d.high, d.low, d.close, d.volume, d.amount,
+                       d.preclose, names.code_name, d.board, d.adjustflag, d.turn,
+                       d.tradestatus, d.pctChg, d.peTTM, d.pbMRQ, d.psTTM, d.pcfNcfTTM, d.isST
+                FROM read_parquet(?) d INNER JOIN stock_name_map names ON names.code = d.code
+            """, [pattern])
+            daily_sources.append("""
+                SELECT date, code, open, high, low, close, volume, amount, preclose, code_name,
+                       board, adjustflag, turn, tradestatus, pctChg, peTTM, pbMRQ, psTTM,
+                       pcfNcfTTM, isST, 1 AS source_priority
+                FROM incremental_daily_bars
+            """)
+
+        if not daily_sources:
+            raise RuntimeError("No daily bars source found.")
+        conn.execute(f"""
+            CREATE OR REPLACE TABLE daily_bars AS
+            WITH combined AS ({' UNION ALL '.join(daily_sources)}),
+            ranked AS (
+                SELECT *, row_number() OVER (PARTITION BY code, date ORDER BY source_priority DESC) AS rn
+                FROM combined
+            )
+            SELECT date, code, open, high, low, close, volume, amount, preclose, code_name,
+                   board, adjustflag, turn, tradestatus, pctChg, peTTM, pbMRQ, psTTM,
+                   pcfNcfTTM, isST
+            FROM ranked WHERE rn = 1
+        """)
+        invalid = conn.execute("""
+            SELECT count(*) FROM daily_bars
+            WHERE code_name IS NULL OR trim(code_name) = '' OR code_name = '2'
+               OR regexp_matches(code_name, '^[0-9.]+$')
+        """).fetchone()[0]
+        if invalid:
+            raise RuntimeError(f"Daily rebuild produced {invalid} invalid canonical names.")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_code_date ON daily_bars(code, date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_bars(date)")
         daily_basic_files = list(paths.daily_basic_dir.glob("*.parquet")) if paths.daily_basic_dir.exists() else []
@@ -345,82 +485,44 @@ def rebuild_duckdb(paths: Paths) -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_basic_date ON daily_basic(date)")
         conn.execute("""
             CREATE OR REPLACE TABLE weekly_bars AS
-            WITH source AS (
-                SELECT
-                    *,
-                    date_trunc('week', date) AS week_start
-                FROM daily_bars
-                WHERE adjustflag = '2'
-                  AND tradestatus = 1
-            ),
+            WITH source AS (SELECT *, date_trunc('week', date) AS week_start FROM daily_bars WHERE adjustflag = '2' AND tradestatus = 1),
             ranked AS (
-                SELECT
-                    *,
-                    row_number() OVER (PARTITION BY code, week_start ORDER BY date ASC) AS rn_asc,
-                    row_number() OVER (PARTITION BY code, week_start ORDER BY date DESC) AS rn_desc
+                SELECT *, row_number() OVER (PARTITION BY code, week_start ORDER BY date ASC) AS rn_asc,
+                         row_number() OVER (PARTITION BY code, week_start ORDER BY date DESC) AS rn_desc
                 FROM source
             ),
             weekly AS (
-                SELECT
-                    max(date) AS date,
-                    code,
-                    week_start,
-                    max(CASE WHEN rn_asc = 1 THEN open END) AS open,
-                    max(high) AS high,
-                    min(low) AS low,
-                    max(CASE WHEN rn_desc = 1 THEN close END) AS close,
-                    max(CASE WHEN rn_asc = 1 THEN preclose END) AS preclose,
-                    sum(volume) AS volume,
-                    sum(amount) AS amount,
-                    max(board) AS board,
-                    max(code_name) AS code_name
-                FROM ranked
-                GROUP BY code, week_start
+                SELECT max(date) AS date, code, week_start,
+                       max(CASE WHEN rn_asc = 1 THEN open END) AS open, max(high) AS high,
+                       min(low) AS low, max(CASE WHEN rn_desc = 1 THEN close END) AS close,
+                       max(CASE WHEN rn_asc = 1 THEN preclose END) AS preclose,
+                       sum(volume) AS volume, sum(amount) AS amount, max(board) AS board,
+                       max(code_name) AS code_name
+                FROM ranked GROUP BY code, week_start
             )
-            SELECT
-                date,
-                code,
-                open,
-                high,
-                low,
-                close,
-                preclose,
-                volume,
-                amount,
-                '2' AS adjustflag,
-                0.0 AS turn,
-                1 AS tradestatus,
-                CASE
-                    WHEN preclose > 0 THEN (close / preclose - 1) * 100
-                    ELSE 0
-                END AS pctChg,
-                0.0 AS peTTM,
-                0.0 AS pbMRQ,
-                0.0 AS psTTM,
-                0.0 AS pcfNcfTTM,
-                0 AS isST,
-                board,
-                code_name
+            SELECT date, code, open, high, low, close, preclose, volume, amount,
+                   '2' AS adjustflag, 0.0 AS turn, 1 AS tradestatus,
+                   CASE WHEN preclose > 0 THEN (close / preclose - 1) * 100 ELSE 0 END AS pctChg,
+                   0.0 AS peTTM, 0.0 AS pbMRQ, 0.0 AS psTTM, 0.0 AS pcfNcfTTM,
+                   0 AS isST, board, code_name
             FROM weekly
-            WHERE open IS NOT NULL
-              AND high IS NOT NULL
-              AND low IS NOT NULL
-              AND close IS NOT NULL;
-            """)
+            WHERE open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_weekly_code_date ON weekly_bars(code, date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_weekly_date ON weekly_bars(date)")
     finally:
         conn.close()
-
+    remove_duckdb_wal(paths.temp_duckdb_path)
     for attempt in range(1, 7):
         try:
+            remove_duckdb_wal(paths.duckdb_path)
             os.replace(paths.temp_duckdb_path, paths.duckdb_path)
+            remove_duckdb_wal(paths.duckdb_path)
             return
         except PermissionError:
             if attempt == 6:
                 raise
             time.sleep(2)
-
 
 def backup_existing(paths: Paths) -> Path | None:
     if not paths.duckdb_path.exists() and not paths.daily_dir.exists():
@@ -529,6 +631,8 @@ def download_daily_basic(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Update A-share historical daily bars from EastMoney Quant SDK.")
     parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--name-map", required=True)
+    parser.add_argument("--rebuild-db-only", action="store_true")
     parser.add_argument("--start", default="2015-01-01")
     parser.add_argument("--end", default=date.today().isoformat())
     parser.add_argument("--adjustflag", default="2")
@@ -537,6 +641,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-backup", action="store_true")
     parser.add_argument("--sleep-seconds", type=float, default=0.03)
     parser.add_argument("--include-weekly", action="store_true")
+    parser.add_argument("--include-daily-basic", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -551,6 +656,7 @@ def main() -> int:
     paths.parquet.mkdir(parents=True, exist_ok=True)
     paths.daily_dir.mkdir(parents=True, exist_ok=True)
     paths.daily_basic_dir.mkdir(parents=True, exist_ok=True)
+    name_map = load_name_map(Path(args.name_map).resolve())
     set_token(token)
 
     end = pd.to_datetime(args.end).date()
@@ -566,6 +672,15 @@ def main() -> int:
 
     if args.dry_run:
         return 0
+    if args.rebuild_db_only:
+        universe = load_instruments(0, name_map)
+        if universe.empty:
+            raise RuntimeError("EastMoney Quant returned no A-share instruments.")
+        universe.to_parquet(paths.universe_path, index=False)
+        write_stock_name_map(paths, name_map)
+        rebuild_duckdb(paths)
+        print(f"[history-update] database-only rebuild completed. universe={len(universe)} duckdb={paths.duckdb_path}", flush=True)
+        return 0
     if start > end and weekly_current:
         print(f"[history-update] no calendar gap. daily_latest={last_date} weekly_latest={last_weekly_date if args.include_weekly else 'disabled'} end={end}", flush=True)
         return 0
@@ -580,7 +695,7 @@ def main() -> int:
         )
         return 0
 
-    universe = load_instruments(args.limit)
+    universe = load_instruments(args.limit, name_map)
     if universe.empty:
         raise RuntimeError("EastMoney Quant returned no A-share instruments.")
     print(f"[history-update] universe={len(universe)} daily_download_start={start} end={end}", flush=True)
@@ -592,6 +707,7 @@ def main() -> int:
         clear_daily(paths)
 
     universe.to_parquet(paths.universe_path, index=False)
+    write_stock_name_map(paths, name_map)
     touched, inserted_rows = download_history(
         paths,
         universe,
@@ -600,13 +716,17 @@ def main() -> int:
         args.sleep_seconds,
         args.adjustflag,
     )
-    basic_touched, basic_inserted_rows = download_daily_basic(
-        paths,
-        universe,
-        start,
-        end,
-        args.sleep_seconds,
-    )
+    if args.include_daily_basic:
+        basic_touched, basic_inserted_rows = download_daily_basic(
+            paths,
+            universe,
+            start,
+            end,
+            args.sleep_seconds,
+        )
+    else:
+        basic_touched, basic_inserted_rows = 0, 0
+        print("[history-update:daily-basic] skipped. pass --include-daily-basic to enable.", flush=True)
     rebuild_duckdb(paths)
     print(
         f"[history-update] completed. touched_stocks={touched} inserted_rows={inserted_rows} "
